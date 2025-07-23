@@ -771,7 +771,7 @@ freeswitch.consoleLog("console", "data base using or not::-------------> " .. to
 			end
 
 	
-			freeswitch.consoleLog("notice", "[xml_handler] XML_STRING: \n" .. XML_STRING .. "\n");
+			--freeswitch.consoleLog("notice", "[xml_handler] XML_STRING: \n" .. XML_STRING .. "\n");
 
 
 		--get the XML string from the cache`
