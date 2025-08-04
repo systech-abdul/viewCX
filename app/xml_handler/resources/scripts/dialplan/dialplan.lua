@@ -275,9 +275,6 @@
 		--close the database connection
 			dbh:release();
 
-
-		freeswitch.consoleLog("notice", "[xml_handler] " .. dialplan_cache_key .. " source: database\n");
-
 		--set the cache
 			if (XML_STRING ~= nil) then
 				local ok, err = cache.set(dialplan_cache_key, XML_STRING, expire["dialplan"]);

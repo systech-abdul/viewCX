@@ -49,7 +49,7 @@
 	debug["sql"] = true;
 
 XML_REQUEST["Cache-Control"] = "no-cache";
-local user_context = "systech";
+--local user_context = "systech";
 
 
 --include json library
@@ -352,7 +352,7 @@ freeswitch.consoleLog("console", "data base using or not::-------------> " .. to
 								hold_music = row.hold_music;
 								toll_allow = row.toll_allow;
 								accountcode = row.accountcode;
-								--user_context = row.user_context;
+								user_context = row.user_context;
 								--user_context = "default";
 								effective_caller_id_name = row.effective_caller_id_name;
 								effective_caller_id_number = row.effective_caller_id_number;
