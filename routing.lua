@@ -13,14 +13,25 @@ session:setVariable("hangup_after_bridge", "true")
 
 
 
+-- Session variables
+local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
+                        session:getVariable("sip_to_user")
+local domain_name = session:getVariable("sip_req_host")
+local src = session:getVariable("sip_from_user")
+
+
+
+
+
 -- Failure prompt playback
-local function handle_prompt_cause()
+function handle_prompt_cause()
     if not session:ready() then
         return
     end
 
-    local cause = (session:getVariable("originate_disposition") or session:getVariable("DIALSTATUS") or
-                      session:getVariable("originate_failed_cause") or "UNKNOWN"):upper()
+    local disposition = session:getVariable("originate_disposition") or session:getVariable("DIALSTATUS") or session:getVariable("originate_failed_cause") or ""
+    local cause = disposition:upper()
+    
 
     local prompts = {
         USER_BUSY = "ivr/ivr-user_busy.wav",
@@ -31,20 +42,16 @@ local function handle_prompt_cause()
         NO_USER_RESPONSE = "ivr/ivr-no_user_response.wav"
     }
 
-    local prompt = prompts[cause] or "ivr/call_failed.wav"
+    local prompt = prompts[cause] 
+    if prompt then
     freeswitch.consoleLog("err", string.format("[handle_prompt_cause] Cause: %s | Playing: %s\n", cause, prompt))
     session:execute("playback", prompt)
+    end
 end
 
--- Session variables
-local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
-                        session:getVariable("sip_to_user")
-local domain_name = session:getVariable("sip_req_host")
-local src = session:getVariable("sip_from_user")
 
 
-
-
+---checking all required param is ready .........
 
 
 if not session:ready() or not destination or destination == "" then
@@ -235,7 +242,7 @@ local function  user_based_domain(args)
     end)
 
     if not extension then
-        freeswitch.consoleLog("err", "[handlers.extensions] No ring_group_uuid found for extension " ..
+        freeswitch.consoleLog("err", "[handlers.extensions] No extension_uuid found for  " ..
             tostring(destination) .. "\n")
         return false
     end
@@ -293,3 +300,7 @@ else
     session:execute("sleep", "1000")
     session:execute("playback", "ivr/ivr-no_route_destination.wav")
 end
+
+
+
+

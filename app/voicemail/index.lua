@@ -37,8 +37,8 @@
 	direct_dial["max_digits"] = 4;
 
 --debug
-	--debug["info"] = true;
-	--debug["sql"] = true;
+	debug["info"] = true;
+	debug["sql"] = true;
 
 --get the argv values
 	script_name = argv[1];
@@ -60,7 +60,7 @@
 
 --set the api
 	api = freeswitch.API();
-
+    
 --if the session exists
 	if (session ~= nil) then
 
@@ -132,6 +132,9 @@
 
 		--get the domain_uuid
 			domain_uuid = session:getVariable("domain_uuid");
+
+         freeswitch.consoleLog("info", " domain_uuid   voice mail " .. tostring(domain_uuid) .."\n");
+
 			if (domain_uuid == nil) then
 				if (domain_name ~= nil) then
 					local sql = "SELECT domain_uuid FROM v_domains ";
@@ -150,6 +153,9 @@
 			end
 
 		--if voicemail_id is non numeric then get the number-alias
+
+         freeswitch.consoleLog("console", " voicemail_id   voice mail " .. tostring(voicemail_id) .."\n");
+
 			if (voicemail_id ~= nil) then
 				if (voicemail_id and tonumber(voicemail_id) == nil) then
 					 voicemail_id = api:execute("user_data", voicemail_id .. "@" .. domain_name .. " attr number-alias");

@@ -71,6 +71,7 @@ debug["xml_string"] =true;
 			dsn = freeswitch.getGlobalVariable("dsn") or ''
 			dsn_callcenter = freeswitch.getGlobalVariable("dsn_callcenter") or ''
 
+				
 		--start the xml array
 			local xml = Xml:new();
 			xml:append([[<?xml version="1.0" encoding="UTF-8" standalone="no"?>]]);
