@@ -17,6 +17,7 @@ session:setVariable("hangup_after_bridge", "true")
 local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
                         session:getVariable("sip_to_user")
 local domain_name = session:getVariable("sip_req_host")
+session:setVariable("domain_name", domain_name)
 local src = session:getVariable("sip_from_user")
 
 

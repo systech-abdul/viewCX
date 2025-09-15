@@ -81,21 +81,74 @@ function handlers.extension(args)
 end
 
 -- Call Center (20000–29999)
+-- Call Center (20000–29999)
 function handlers.callcenter(args)
     if not check_session() then
         return false
     end
-
-    freeswitch.consoleLog("info", "[handlers.callcenter] Routing to callcenter: " .. tostring(args.destination) .. "\n")
-
+    
     session:answer()
     session:sleep(1000)
 
-    local call_name = args.destination .. "@" .. args.domain
-    session:execute("callcenter", call_name)
+    if not session:ready() then
+        freeswitch.consoleLog("err", "Session not ready for bindDigitAction\n")
+        return false
+    end
+
+    local uuid = session:get_uuid()
+    local queue_extension = args.destination
+    local domain_uuid = args.domain_uuid
+    local queue = queue_extension .. "@" .. args.domain
+    local interval_ms = 5000
+    local ivr_id = 7002
+
+    -- Query the database for queue info
+    local queue_data = nil
+    local sql = [[
+        SELECT *
+        FROM v_call_center_queues
+        WHERE queue_extension = :queue_extension
+          AND domain_uuid = :domain_uuid
+        LIMIT 1
+    ]]
+    local params = {
+        queue_extension = queue_extension,
+        domain_uuid = domain_uuid
+    }
+
+    dbh:query(sql, params, function(row)
+        queue_data = row
+    end)
+
+    -- Log for debug
+    if queue_data then
+        freeswitch.consoleLog("INFO", "[CallCenter] Queue Name: " .. (queue_data.queue_name or "nil") .. "\n")
+    else
+        freeswitch.consoleLog("WARNING", "[CallCenter] Queue not found for extension: " .. queue_extension .. "\n")
+        return false
+    end
+
+    -- Set callcenter variables
+    session:setVariable("queue_name", queue_data.queue_name or "default")
+    session:setVariable("queue", queue)
+
+    -- Bind digit action
+    session:execute("bind_digit_action", "queue_control,9,exec:transfer,7002 XML systech,both,self")
+
+    -- Trigger background Lua for queue announcements
+    local api = freeswitch.API()
+    api:execute("luarun", string.format("callcenter-announce-and-prompt.lua %s %s %d %d", uuid, queue, interval_ms, ivr_id))
+
+    -- Transfer into the call center queue
+    session:execute("callcenter", queue)
+
+    -- Cleanup
+    session:execute("unbind_digit_action", "queue_control")
 
     return true
 end
+
+
 
 -- Ring Group (30000–39999)
 function handlers.ringgroup(args)
@@ -145,6 +198,7 @@ function handlers.ringgroup(args)
     end
 
     session:setVariable("ring_group_uuid", ring_group_uuid)
+    session:execute("lua", "app.lua ring_groups")
 
     return true
 end
@@ -164,6 +218,24 @@ function handlers.ivr(args, counter)
     local visited = args.visited_ivr or {}
     local MAX_PATH_STEPS = 20
 
+    -- Ensure variable tracking table exists ivr_vars default values 
+    lua_ivr_vars = lua_ivr_vars or {}
+    
+    --session:execute("info")
+
+
+    local src_phone = session:getVariable("sip_from_user")
+    local dest_phone = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
+                           session:getVariable("sip_to_user")
+    local call_start_time = session:getVariable("start_stamp")
+    local call_uuid = session:getVariable("uuid")
+
+    lua_ivr_vars["src_phone"] = src_phone
+    lua_ivr_vars["dest_phone"] = dest_phone
+    lua_ivr_vars["call_start_time"] = call_start_time
+    lua_ivr_vars["call_uuid"] = call_uuid
+
+    -- for ivr journey path
     args.ivr_path = args.ivr_path or {}
     counter = counter or {
         count = 0
@@ -188,7 +260,8 @@ function handlers.ivr(args, counter)
             m.ivr_menu_name AS name,
             MIN(op.preferred_gateway_uuid::text) AS preferred_gateway_uuid,
             
-            m.ivr_menu_uuid,MIN(d.domain_name::text) AS domain_name
+            m.ivr_menu_uuid,MIN(d.domain_name::text) AS domain_name,
+            MIN(m.variables::text) AS parent_variable
         FROM v_ivr_menu_options op
         JOIN v_ivr_menus m ON m.ivr_menu_uuid = op.ivr_menu_uuid
         JOIN v_domains d ON  d.domain_uuid =  m.domain_uuid
@@ -226,6 +299,7 @@ function handlers.ivr(args, counter)
     local inter_digit_timeout = tonumber(ivr_data.inter_digit_timeout) or 2000
     local max_failures = tonumber(ivr_data.max_failures) or 3
     local domain_name = ivr_data.domain_name
+    local parent_variable = ivr_data.parent_variable
 
     local keys = split(ivr_data.option_key, ",")
     local actions = split(ivr_data.actions, ",")
@@ -247,7 +321,6 @@ function handlers.ivr(args, counter)
     local input = session:playAndGetDigits(min_digit, max_digit, max_failures, timeout, "#", greet_long_path,
         invalid_sound_path, digit_regex, "input_digits", inter_digit_timeout, nil)
 
-    freeswitch.consoleLog("console", "[IVR] Selected input: " .. input .. "\n")
 
     local matched_action = search(key_action_list, input)
     local action_type, target = nil, nil
@@ -259,24 +332,13 @@ function handlers.ivr(args, counter)
             target = ""
         end
     end
+     
+    freeswitch.consoleLog("console", "[IVR] Selected input: " .. input .. " action_type: "..tostring(action_type).." \n")
 
-    -- Log single step
-    --[[ local log_query = [[
-        INSERT INTO call_logging_ivr 
-        (call_uuid, domain_uuid, ivr_id, input_digits, timestamp, action_type, action_target) 
-        VALUES 
-        (:call_uuid, :domain_uuid, :ivr_id, :input_digits, NOW(), :action_type, :action_target)
-    ]]
-
-    --[[  dbh:query(log_query, {
-        call_uuid = session:get_uuid(),
-        domain_uuid = domain_uuid,
-        ivr_id = modified_ivr_id,
-        input_digits = input,
-        action_type = action_type or 'unknown',
-        action_target = target or ''
-    }) ]]
-
+    -- Update variable with current input
+    if parent_variable and input then
+        lua_ivr_vars[parent_variable] = input
+    end
     -- Append to IVR journey path
     if #args.ivr_path < MAX_PATH_STEPS then
         table.insert(args.ivr_path, {
@@ -292,15 +354,20 @@ function handlers.ivr(args, counter)
 
     -- Upsert journey
     local journey_query = [[
-        INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, updated_at)
-        VALUES (:call_uuid, :domain_uuid, :full_path::jsonb, NOW())
-        ON CONFLICT (call_uuid)
-        DO UPDATE SET full_path = EXCLUDED.full_path, updated_at = NOW()
-    ]]
+    INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, variables, updated_at)
+    VALUES (:call_uuid, :domain_uuid, :full_path::jsonb, :variables::jsonb, NOW())
+    ON CONFLICT (call_uuid)
+    DO UPDATE SET 
+        full_path = EXCLUDED.full_path,
+        variables = EXCLUDED.variables,
+        updated_at = NOW()
+]]
+
     dbh:query(journey_query, {
         call_uuid = session:get_uuid(),
         domain_uuid = domain_uuid,
-        full_path = json.encode(args.ivr_path)
+        full_path = json.encode(args.ivr_path),
+        variables = json.encode(lua_ivr_vars or {})
     })
 
     -- Route to action
@@ -396,6 +463,7 @@ function handlers.ivr(args, counter)
             return session:execute("hangup")
 
         elseif action_type == "lua" then
+            -- usr/share/freeswitch/scripts  please paste lua file here to make it executable 
             incrementCounter(counter)
             if getCurrentCount(counter) >= max_failures then
                 session:execute("playback", exit_sound_path)
@@ -412,7 +480,7 @@ function handlers.ivr(args, counter)
             session:setVariable("destination_number", target)
             handlers.outbound(args)
 
-        elseif action_type == "extension" or action_type == "ringgroup" or action_type == "queue" or action_type ==
+        elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type ==
             "conf" then
             session:setVariable("destination_number", target)
             return session:execute("transfer", target .. " XML systech")
@@ -420,15 +488,13 @@ function handlers.ivr(args, counter)
         elseif action_type == "voicemail" then
             freeswitch.consoleLog("info", " " .. tostring(action_type) .. "\n");
             session:setVariable("destination_number", target)
-            -- session:setVariable("domain_name", "cc.systech.ae")
-            -- session:setVariable("voicemail_id", "9ea536c1-080b-439f-bd2e-a4fceba46ea4")
-            -- session:execute("lua", "/usr/share/freeswitch/scripts/app/voicemail/index.lua")
-            local profile = "default"
-            local mailbox = target
+            voicemail_handler(target, domain_name, domain_uuid)
 
-            -- Execute voicemail app
-            local args = string.format("%s %s %s", profile, domain_name, mailbox)
-            session:execute("voicemail", args)
+        elseif action_type == "api" then
+            dynamic_variables = json.encode(lua_ivr_vars or {})
+            -- freeswitch.consoleLog("info", " lua_ivr_vars" .. (dynamic_variables ) .. "\n");
+
+            api_handler(target, dynamic_variables)
 
         else
             session:execute("playback", exit_sound_path)
@@ -653,6 +719,203 @@ function transfer(destination_number, destination_type, context)
 
     return true
 end
+
+function voicemail_handler(destination_number, domain_name, domain_uuid)
+    if not session:ready() then
+        freeswitch.consoleLog("ERR", "[voicemail] Session not ready\n")
+        return false
+    end
+
+    -- Log start
+    freeswitch.consoleLog("INFO",
+        "[voicemail] Starting handler for: " .. destination_number .. "@" .. domain_name .. "\n")
+
+    -- Build SQL query
+    local sql = string.format([[
+        SELECT *
+        FROM v_voicemails v
+        LEFT JOIN v_voicemail_greetings g ON g.voicemail_id = v.voicemail_id
+        WHERE v.voicemail_id = '%s'
+          AND v.domain_uuid = '%s';
+    ]], destination_number, domain_uuid)
+
+    -- Run SQL
+    dbh:query(sql, function(row)
+        -- Log results or use them
+        freeswitch.consoleLog("INFO", "[voicemail] Found voicemail record for ID: " .. row.voicemail_id .. "\n")
+        greeting_id = row.greeting_id;
+
+    end)
+
+    freeswitch.consoleLog("INFO", "[voicemail] greeting_id: " .. greeting_id .. "\n")
+    if greeting_id then
+        session:setVariable("voicemail_greeting_number", "1")
+    end
+
+    -- Continue to voicemail
+    local profile = "default"
+    -- session:setVariable("voicemail_skip_goodbye", "true")
+
+    session:setVariable("voicemail_terminate_on_silence", "false")
+    session:setVariable("domain_name", domain_name)
+
+    local args = string.format("%s %s %s", profile, domain_name, destination_number)
+    session:execute("voicemail", args)
+
+    return true
+end
+
+
+
+function api_handler(api_id, dynamic_payload)
+    if not check_session() then
+        return false
+    end
+
+    local api = freeswitch.API()
+
+    -- Step 1: Fetch API settings from DB
+    local api_settings = nil
+    local sql = string.format("SELECT * FROM api_settings WHERE enable = true AND id = %d LIMIT 1", tonumber(api_id))
+    dbh:query(sql, function(row)
+        api_settings = row
+    end)
+
+    if not api_settings then
+        freeswitch.consoleLog("ERR", "[api_handler] No enabled API settings found for ID: " .. tostring(api_id) .. "\n")
+        return false
+    end
+
+    -- Step 2: Parse API settings
+    local endpoint = api_settings.endpoint or ""
+    local method = string.lower(api_settings.method or "post")
+    local headers = json.decode(api_settings.headers or "{}") or {}
+    local static_payload = json.decode(api_settings.payload or "{}") or {}
+    local key_based_actions = json.decode(api_settings.key_based_actions or "{}") or {}
+
+    local auth_enabled = api_settings.authentication == "true" or api_settings.authentication == true
+    local username = api_settings.username
+    local password = api_settings.password
+    local token = api_settings.token
+
+    local api_name = api_settings.name or "API Call"
+    local api_type = api_settings["type"] or "REST"
+
+    -- Step 3: Merge dynamic_payload into static_payload
+    local dynamic_data = json.decode(dynamic_payload or "{}") or {}
+    static_payload["variables"] = dynamic_data
+
+    local final_payload = static_payload
+    local json_payload = json.encode(final_payload)
+
+    -- Step 4: Authentication
+    if auth_enabled then
+        if token and token ~= "" then
+            headers["Authorization"] = "Bearer " .. token
+        elseif username and password then
+            local b64 = require("resources.functions.base64")
+            local auth_str = b64.encode(username .. ":" .. password)
+            headers["Authorization"] = "Basic " .. auth_str
+        else
+            freeswitch.consoleLog("ERR", "[api_handler] Auth enabled but missing credentials/token.\n")
+            return false
+        end
+    end
+
+    -- Step 5: Prepare headers
+    local header_str = ""
+    for k, v in pairs(headers) do
+        header_str = header_str .. k .. ": " .. tostring(v) .. ","
+    end
+    header_str = header_str:gsub(",$", "")
+
+    -- Step 6: Set curl variables
+    session:setVariable("curl_timeout", "10")
+    if header_str ~= "" then
+        session:setVariable("curl_headers", header_str)
+    end
+    if method == "post" or method == "put" or method == "patch" then
+        session:setVariable("curl_post_data", json_payload)
+    end
+
+    -- Step 7: Execute curl
+    session:execute("curl", endpoint .. " json " .. method)
+
+    -- Step 8: Capture response
+    local status_code = session:getVariable("curl_response_code") or "nil"
+    local response_data = session:getVariable("curl_response_data") or "nil"
+
+    -- Step 9: Log request/response
+    freeswitch.consoleLog("INFO", "[api_handler] --- API Call: " .. api_name .. " ---\n")
+    freeswitch.consoleLog("INFO", "[api_handler] URL: " .. endpoint .. "\n")
+    freeswitch.consoleLog("INFO", "[api_handler] Method: " .. method:upper() .. "\n")
+    freeswitch.consoleLog("INFO", "[api_handler] Headers: " .. header_str .. "\n")
+    freeswitch.consoleLog("INFO", "[api_handler] Payload: " .. json_payload .. "\n")
+    freeswitch.consoleLog("INFO", "[api_handler] Status Code: " .. status_code .. "\n")
+    freeswitch.consoleLog("INFO", "[api_handler] Response Data: " .. response_data .. "\n")
+
+    -- Step 10: Handle key_based_actions
+    local next_action = nil
+    local decoded_response = {}
+
+    -- Try decoding the top-level response
+    local ok1, top = pcall(json.decode, response_data or "{}")
+    if ok1 and type(top) == "table" then
+        -- If it has a 'body' field that's a JSON string, decode it too
+        if top["body"] and type(top["body"]) == "string" then
+            freeswitch.consoleLog("DEBUG", "[api_handler] Detected nested 'body' field in response, decoding...\n")
+            local ok2, inner = pcall(json.decode, top["body"])
+            if ok2 and type(inner) == "table" then
+                decoded_response = inner
+                freeswitch.consoleLog("DEBUG", "[api_handler] Decoded body content: " .. json.encode(decoded_response) .. "\n")
+            else
+                freeswitch.consoleLog("ERR", "[api_handler] Failed to decode 'body' as JSON.\n")
+                decoded_response = top
+            end
+        else
+            decoded_response = top
+        end
+    else
+        freeswitch.consoleLog("ERR", "[api_handler] Failed to decode API response as JSON.\n")
+        return false
+    end
+
+    -- Match key_based_actions intelligently for nested values
+    for key, mappings in pairs(key_based_actions) do
+        local val = decoded_response[key]
+        if val then
+            if type(val) == "string" then
+                -- Simple string match
+                if mappings[val] then
+                    next_action = mappings[val]
+                    break
+                end
+            elseif type(val) == "table" then
+                -- val is a nested table, check which key is truthy in val and also exists in mappings
+                for subkey, subval in pairs(val) do
+                    if subval and mappings[subkey] then
+                        next_action = mappings[subkey]
+                        break
+                    end
+                end
+                if next_action then break end
+            end
+        end
+    end
+
+    -- Execute next action if matched
+    if next_action then
+        freeswitch.consoleLog("INFO", "[api_handler] Next Action (from key_based_actions): " .. tostring(next_action) .. "\n")
+
+        session:execute("transfer", next_action .. " XML systech")
+        
+    else
+        freeswitch.consoleLog("WARNING", "[api_handler] No matching key_based_action found in response.\n")
+    end
+
+    return true
+end
+
 
 return handlers
 

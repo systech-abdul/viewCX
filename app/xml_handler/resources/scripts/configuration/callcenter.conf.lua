@@ -122,6 +122,8 @@ debug["xml_string"] =true;
 
 				--replace the space with a dash
 					queue_name = queue_name:gsub(" ", "-");
+				    queue_with_domain = queue_extension .. "@" .. domain_name
+
 
 				--sanitize the queue_record_template and allow specific variables
 					queue_record_template = xml.sanitize(queue_record_template);
@@ -130,6 +132,8 @@ debug["xml_string"] =true;
 					queue_record_template = string.gsub(queue_record_template, "{record_ext}", "${record_ext}");
 					queue_record_template = string.gsub(queue_record_template, "{caller_id_number}", "${caller_id_number}");
 					queue_record_template = string.gsub(queue_record_template, "{caller_destination}", "${caller_destination}");
+					queue_record_template = string.gsub(queue_record_template, "{queue_name}", "${queue_name}");
+					queue_record_template = string.gsub(queue_record_template, "{queue}", "${queue}");
 					queue_record_template = string.gsub(queue_record_template, "{sip_from_user}", "${sip_from_user}");
 					queue_record_template = string.gsub(queue_record_template, "{sip_to_user}", "${sip_to_user}");
 					queue_record_template = string.gsub(queue_record_template, "{sip_req_user}", "${sip_req_user}");
@@ -227,14 +231,18 @@ debug["xml_string"] =true;
 						if (agent_record == "true") then
 							record = string.format(",execute_on_pre_bridge='record_session %s/%s/archive/${strftime(%%Y)}/${strftime(%%b)}/${strftime(%%d)}/${uuid}.${record_ext}'", recordings_dir, domain_name)
 						end
+
+						
+
+					
 						if (string.find(agent_contact, '}') == nil) then
 							--not found
 							if (string.find(agent_contact, 'sofia/gateway') == nil) then
 								--add the call_timeout
-								agent_contact = "{call_timeout="..agent_call_timeout..",domain_name="..domain_name..",domain_uuid="..domain_uuid..",extension_uuid="..extension_uuid..",sip_h_caller_destination=${caller_destination}"..record.."}"..agent_contact;
+								agent_contact = "{call_timeout="..agent_call_timeout..",domain_name="..domain_name..",domain_uuid="..domain_uuid..",extension_uuid="..extension_uuid..",sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue}"..record.."}"..agent_contact;
 							else
 								--add the call_timeout and confirm
-								agent_contact = "{"..confirm..",call_timeout="..agent_call_timeout..",domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_caller_destination=${caller_destination}}"..agent_contact;
+								agent_contact = "{"..confirm..",call_timeout="..agent_call_timeout..",domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue}}"..agent_contact;
 							end
 						else
 							--found
@@ -245,13 +253,13 @@ debug["xml_string"] =true;
 										pos = string.find(agent_contact, "}");
 										first = string.sub(agent_contact, 0, pos -1);
 										last = string.sub(agent_contact, pos);
-										agent_contact = first..[[,domain_name=]]..domain_name..[[,domain_uuid=]]..domain_uuid..[[,sip_h_caller_destination=${caller_destination},call_timeout=]]..agent_call_timeout..last;
+										agent_contact = first..[[,domain_name=]]..domain_name..[[,domain_uuid=]]..domain_uuid..[[,sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue},call_timeout=]]..agent_call_timeout..last;
 								else
 										--add the call_timeout
 										pos = string.find(agent_contact, "}");
 										first = string.sub(agent_contact, 0, pos - 1);
 										last = string.sub(agent_contact, pos);
-										agent_contact = first..[[,sip_h_caller_destination=${caller_destination},call_timeout=]]..agent_call_timeout..last;
+										agent_contact = first..[[,sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue},call_timeout=]]..agent_call_timeout..last;
 								end
 						else
 								--found
@@ -260,10 +268,10 @@ debug["xml_string"] =true;
 								last = string.sub(agent_contact, pos);
 								if (string.find(agent_contact, 'call_timeout') == nil) then
 									--add the call_timeout and confirm
-									agent_contact = first..','..confirm..',sip_h_caller_destination=${caller_destination},domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_caller_destination=${caller_destination},call_timeout='..agent_call_timeout..last;
+									agent_contact = first..','..confirm..',sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue},domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue},call_timeout='..agent_call_timeout..last;
 								else
 									--add confirm
-									agent_contact = tmp_first..',domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_caller_destination=${caller_destination},'..confirm..tmp_last;
+									agent_contact = tmp_first..',domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Queue=${queue},'..confirm..tmp_last;
 								end
 							end
 						end
@@ -271,6 +279,11 @@ debug["xml_string"] =true;
 				--sanitize the agent_contact and allow specific variables
 					agent_contact = xml.sanitize(agent_contact);
 					agent_contact = string.gsub(agent_contact, "{caller_destination}", "${caller_destination}");
+					agent_contact = string.gsub(agent_contact, "{queue_name}", "${queue_name}");
+					agent_contact = string.gsub(agent_contact, "{queue}", "${queue}");
+					
+
+					
 					agent_contact = string.gsub(agent_contact, "{strftime", "${strftime");
 					agent_contact = string.gsub(agent_contact, "{uuid}", "${uuid}");
 					agent_contact = string.gsub(agent_contact, "{record_ext}", "${record_ext}");
