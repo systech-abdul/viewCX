@@ -1,5 +1,5 @@
 json = require "resources.functions.lunajson"
-
+api = freeswitch.API()
 local handlers = {}
 
 -- Connect to the database once
@@ -81,12 +81,12 @@ function handlers.extension(args)
 end
 
 -- Call Center (20000–29999)
--- Call Center (20000–29999)
+
 function handlers.callcenter(args)
     if not check_session() then
         return false
     end
-    
+
     session:answer()
     session:sleep(1000)
 
@@ -99,8 +99,6 @@ function handlers.callcenter(args)
     local queue_extension = args.destination
     local domain_uuid = args.domain_uuid
     local queue = queue_extension .. "@" .. args.domain
-    local interval_ms = 5000
-    local ivr_id = 7002
 
     -- Query the database for queue info
     local queue_data = nil
@@ -120,31 +118,87 @@ function handlers.callcenter(args)
         queue_data = row
     end)
 
-    -- Log for debug
-    if queue_data then
-        freeswitch.consoleLog("INFO", "[CallCenter] Queue Name: " .. (queue_data.queue_name or "nil") .. "\n")
-    else
+    if not queue_data then
         freeswitch.consoleLog("WARNING", "[CallCenter] Queue not found for extension: " .. queue_extension .. "\n")
         return false
     end
 
-    -- Set callcenter variables
     session:setVariable("queue_name", queue_data.queue_name or "default")
     session:setVariable("queue", queue)
 
-    -- Bind digit action
-    session:execute("bind_digit_action", "queue_control,9,exec:transfer,7002 XML systech,both,self")
+    -- Parse JSON options from queue_flow_json
+    local options = {}
+    if queue_data.queue_flow_json and queue_data.queue_flow_json ~= '' then
+        local success, decoded = pcall(json.decode, queue_data.queue_flow_json)
+        if success and decoded and decoded.options then
+            options = decoded.options
+        else
+            freeswitch.consoleLog("WARNING", "[CallCenter] Failed to parse JSON options\n")
+        end
+    else
+        freeswitch.consoleLog("INFO", "[CallCenter] No queue_flow_json or empty string\n")
+    end
 
-    -- Trigger background Lua for queue announcements
+    -- Dynamically bind digit actions
+    
+
+
+   for key, config in pairs(options) do
+    if key and type(config) == "table" and config.action and config.value then
+        local action = config.action
+        local value = config.value
+        local hangup = (config.hangup ~= nil) and config.hangup or true
+
+        local bind_str = nil
+
+        if action == "transfer" then
+            bind_str = string.format("queue_control,%s,exec:transfer,%s XML systech,both,self", key, value)
+        elseif action == "callback" then
+            bind_str = string.format("queue_control,%s,exec:lua,callback.lua %s", key, value)
+        elseif action == "api" then
+            --session:setVariable("encoded_payload", {})
+            session:setVariable("api_id", value)
+            session:setVariable("should_hangup", tostring(hangup))
+
+            bind_str = string.format("queue_control,%s,exec:lua,api_handler.lua %s ",key,value)
+
+            freeswitch.consoleLog("INFO", "[CallCenter] hangup after api calll " .. tostring(hangup) .. "\n")
+            
+
+        else
+            freeswitch.consoleLog("WARNING", "[CallCenter] Unknown action for key " .. tostring(key) .. ": " .. tostring(action) .. "\n")
+        end
+
+        if bind_str then
+            freeswitch.consoleLog("INFO", "[CallCenter] Binding digit " .. tostring(key) .. " to action " .. tostring(action) .. " with value " .. tostring(value) .. "\n")
+            session:execute("bind_digit_action", bind_str)
+        end
+    else
+        freeswitch.consoleLog("WARNING", "[CallCenter] Invalid or missing config for key: " .. tostring(key) .. "\n")
+    end
+    end
+
+
+
+    -- Prepare variables for announcement script
+    local queue_announce_frequency = tonumber(queue_data.queue_announce_frequency) or 5000
+    local queue_announce_sound = queue_data.queue_announce_sound or "default-sound.wav"
+
+    -- Run background announcement/prompt Lua
     local api = freeswitch.API()
-    api:execute("luarun", string.format("callcenter-announce-and-prompt.lua %s %s %d %d", uuid, queue, interval_ms, ivr_id))
+    api:execute("luarun", string.format(
+        "callcenter-announce-and-prompt.lua %s %s %d %s",
+        uuid,
+        queue,
+        queue_announce_frequency,
+        queue_announce_sound
+    ))
 
-    -- Transfer into the call center queue
+    -- Transfer to queue
     session:execute("callcenter", queue)
-
-    -- Cleanup
-    session:execute("unbind_digit_action", "queue_control")
-
+   
+     -- clear_digit_action  from  queue action
+    session:execute("clear_digit_action", "queue_control")
     return true
 end
 
@@ -284,8 +338,11 @@ function handlers.ivr(args, counter)
         return
     end
 
+
     local ivr_menu_uuid = ivr_data.ivr_menu_uuid
-    local base_path = "/var/lib/freeswitch/recordings/" .. domain .. "/"
+    local domain_name = ivr_data.domain_name
+   
+    local base_path = "/var/lib/freeswitch/recordings/" .. domain_name .. "/"
     local greet_long_path =
         (ivr_data.greet_long and ivr_data.greet_long ~= "") and (base_path .. ivr_data.greet_long) or ""
     local invalid_sound_path = (ivr_data.invalid_sound and ivr_data.invalid_sound ~= "") and
@@ -298,9 +355,8 @@ function handlers.ivr(args, counter)
     local timeout = tonumber(ivr_data.timeout) or 3000
     local inter_digit_timeout = tonumber(ivr_data.inter_digit_timeout) or 2000
     local max_failures = tonumber(ivr_data.max_failures) or 3
-    local domain_name = ivr_data.domain_name
     local parent_variable = ivr_data.parent_variable
-
+    
     local keys = split(ivr_data.option_key, ",")
     local actions = split(ivr_data.actions, ",")
     local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
@@ -494,7 +550,15 @@ function handlers.ivr(args, counter)
             dynamic_variables = json.encode(lua_ivr_vars or {})
             -- freeswitch.consoleLog("info", " lua_ivr_vars" .. (dynamic_variables ) .. "\n");
 
-            api_handler(target, dynamic_variables)
+            --api_handler(target, dynamic_variables)
+        local encoded_payload = json.encode(lua_ivr_vars or {})
+
+        session:setVariable("encoded_payload", encoded_payload)
+        session:setVariable("api_id", target)
+        session:setVariable("should_hangup", "false")
+        session:execute("lua", "api_handler.lua")
+
+
 
         else
             session:execute("playback", exit_sound_path)
@@ -569,6 +633,8 @@ function handlers.handle_did_call(args)
         return false
     end
 
+
+    session:execute("info");
     local log_message = "[handlers.handle_did_call] Routing args:\n"
     for k, v in pairs(args) do
         log_message = log_message .. string.format("  %s = %s\n", tostring(k), tostring(v))
@@ -766,7 +832,7 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
 end
 
 
-
+--[[ 
 function api_handler(api_id, dynamic_payload)
     if not check_session() then
         return false
@@ -914,7 +980,7 @@ function api_handler(api_id, dynamic_payload)
     end
 
     return true
-end
+end ]]
 
 
 return handlers

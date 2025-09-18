@@ -5,7 +5,7 @@ local api = freeswitch.API()
 local caller_uuid = argv[1]
 local queue_name = argv[2]
 local mseconds = tonumber(argv[3]) or 10000
-local transfer_ext = argv[4] or nil  -- optional: dialplan extension to transfer to
+local play_file = argv[4] or nil  -- optional: play_file announce-sound
 
 if not caller_uuid or not queue_name or not mseconds then
     freeswitch.consoleLog("err", "[CallcenterAnnounce] Missing arguments.\n")

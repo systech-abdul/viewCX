@@ -24,6 +24,8 @@ local src = session:getVariable("sip_from_user")
 
 
 
+
+
 -- Failure prompt playback
 function handle_prompt_cause()
     if not session:ready() then
