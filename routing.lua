@@ -5,13 +5,11 @@ local json = require("resources.functions.lunajson")
 local dbh = Database.new("system")
 assert(dbh:connected())
 
-debug["sql"] = true;
+debug["sql"] = false;
 
 -- Session setup
 session:setVariable("continue_on_fail", "3,17,18,19,20,27,USER_NOT_REGISTERED")
 session:setVariable("hangup_after_bridge", "true")
-
-
 
 -- Session variables
 local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
@@ -20,21 +18,15 @@ local domain_name = session:getVariable("sip_req_host")
 session:setVariable("domain_name", domain_name)
 local src = session:getVariable("sip_from_user")
 
-
-
-
-
-
-
 -- Failure prompt playback
 function handle_prompt_cause()
     if not session:ready() then
         return
     end
 
-    local disposition = session:getVariable("originate_disposition") or session:getVariable("DIALSTATUS") or session:getVariable("originate_failed_cause") or ""
+    local disposition = session:getVariable("originate_disposition") or session:getVariable("DIALSTATUS") or
+                            session:getVariable("originate_failed_cause") or ""
     local cause = disposition:upper()
-    
 
     local prompts = {
         USER_BUSY = "ivr/ivr-user_busy.wav",
@@ -45,17 +37,14 @@ function handle_prompt_cause()
         NO_USER_RESPONSE = "ivr/ivr-no_user_response.wav"
     }
 
-    local prompt = prompts[cause] 
+    local prompt = prompts[cause]
     if prompt then
-    freeswitch.consoleLog("err", string.format("[handle_prompt_cause] Cause: %s | Playing: %s\n", cause, prompt))
-    session:execute("playback", prompt)
+        freeswitch.consoleLog("err", string.format("[handle_prompt_cause] Cause: %s | Playing: %s\n", cause, prompt))
+        session:execute("playback", prompt)
     end
 end
 
-
-
 ---checking all required param is ready .........
-
 
 if not session:ready() or not destination or destination == "" then
     freeswitch.consoleLog("err", "[routing.lua] Missing or invalid destination.\n")
@@ -63,7 +52,8 @@ if not session:ready() or not destination or destination == "" then
     return
 end
 
-freeswitch.consoleLog("info",string.format("[routing.lua] Dialed: %s | Domain: %s\n", destination, domain_name or "unknown"))
+freeswitch.consoleLog("info",
+    string.format("[routing.lua] Dialed: %s | Domain: %s\n", destination, domain_name or "unknown"))
 
 -- Fetch domain_uuid
 local function get_domain_uuid(name)
@@ -80,19 +70,18 @@ end
 local domain_uuid = get_domain_uuid(domain_name)
 session:setVariable("domain_uuid", domain_uuid)
 
-
---session:execute("info") 
+-- session:execute("info") 
 
 ---channel update 
 
---session:execute("info") 
---local uuid = session:getVariable("uuid") 
---local sip_call_id = session:getVariable("sip_call_id") or session:getVariable("variable_sip_call_id")
---local did_num = destination 
+-- session:execute("info") 
+-- local uuid = session:getVariable("uuid") 
+-- local sip_call_id = session:getVariable("sip_call_id") or session:getVariable("variable_sip_call_id")
+-- local did_num = destination 
 --
 -- freeswitch.consoleLog("console","uuid ---------".. uuid);
 --
---if uuid and domain_uuid then
+-- if uuid and domain_uuid then
 --    local sql = [[
 --        UPDATE channels
 --        SET domain_name = :domain_name,
@@ -118,12 +107,10 @@ session:setVariable("domain_uuid", domain_uuid)
 --    end
 --
 --    dbh:query(sql, params)
---else
+-- else
 --    freeswitch.consoleLog("warning",
 --        "[routing.lua] Skipping channel update — uuid or domain_uuid is missing.\n")
---end
-
-
+-- end
 
 -- Routing args
 local args = {
@@ -132,55 +119,74 @@ local args = {
     domain_uuid = domain_uuid
 }
 
-
-
 -- DID validation
 local function is_valid_did(dest)
-local sql = [[
-    SELECT r.*, d.domain_name
+
+    local caller_ip = session:getVariable("network_addr")
+    freeswitch.consoleLog("info", "[Lua] Caller IP: " .. tostring(caller_ip) .. "\n")
+    local sql = [[
+    SELECT r.*, d.domain_name,
+    CASE
+    WHEN r.src_regex_pattern = '*' THEN 'matched_star'
+    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
+    && ARRAY[REPLACE(:src, '+', '')]
+    AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 'match_both_src_and_caler_ip'
+    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
+    && ARRAY[REPLACE(:src, '+', '')] THEN 'matched_src'
+    ELSE 'no_match'
+    END AS match_type
     FROM v_did_routes r
     JOIN v_domains d ON d.domain_uuid = r.domain_uuid
     WHERE r.did_num = :dest
       AND (
-           REPLACE(r.src_regex_pattern, '+', '') = REPLACE(:src, '+', '')
-           OR r.src_regex_pattern = '*'
-          )
-      AND r.enabled = true
+        r.src_regex_pattern = '*'
+        OR string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
+       && ARRAY[REPLACE(:src, '+', '')]
+    )
+    AND r.enabled = true
+    AND (r.ip_check IS NULL OR r.ip_check = :caller_ip)
     ORDER BY 
-      CASE 
-        WHEN REPLACE(r.src_regex_pattern, '+', '') = REPLACE(:src, '+', '') THEN 0
-        WHEN r.src_regex_pattern = '*' THEN 1
-        ELSE 2
-      END
+    CASE 
+    WHEN r.src_regex_pattern = '*' THEN 2
+    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
+         && ARRAY[REPLACE(:src, '+', '')]
+         AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 0
+    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
+         && ARRAY[REPLACE(:src, '+', '')] THEN 1
+    ELSE 3
+    END
     LIMIT 1
-]]
+    ]]
 
-
-    local found = false
-
-
-       
-
-   
     dbh:query(sql, {
         src = tostring(src),
-        dest = tostring(dest)
+        dest = tostring(dest),
+        caller_ip = tostring(caller_ip)
     }, function(row)
-
-
         for k, v in pairs(row) do
             args[k] = v
         end
         found = true
+
+        if row.match_type then
+            freeswitch.consoleLog("CONSOLE", "[Routing] Match type: " .. row.match_type .. "\n")
+        end
     end)
 
-
+    
 
     if (debug["sql"]) then
         local json = require "resources.functions.lunajson"
-        freeswitch.consoleLog("notice","[is_valid_did ] SQL: " .. sql .."\n src : "..src.."\n dest : "..dest.."\n")
+        freeswitch.consoleLog("notice",
+            "[is_valid_did] SQL: " .. sql .. "\nsrc: " .. tostring(src) .. "\ndest: " .. tostring(dest) ..
+                "\ncaller_ip: " .. tostring(caller_ip) .. "\n")
     end
 
+    if found == nil then
+        freeswitch.consoleLog("DEBUG", "[Routing] Match type: No match with DID  Going for Outbound Call \n")
+    end
+
+    -- Check allowed days if any
     if found and args.days and args.days ~= "" then
         local ok, allowed_days = pcall(json.decode, args.days)
         if not ok then
@@ -188,12 +194,14 @@ local sql = [[
             session:execute("hangup")
             return false
         end
+
         local today = ({"sun", "mon", "tue", "wed", "thu", "fri", "sat"})[tonumber(os.date("%w")) + 1]
         for _, day in ipairs(allowed_days) do
             if day == today then
                 return true
             end
         end
+
         freeswitch.consoleLog("warning", "[routing.lua] Call not allowed on this day.\n")
         return false
     end
@@ -201,11 +209,7 @@ local sql = [[
     return found
 end
 
-
-
-
-local function  user_based_domain(args)
-  
+local function user_based_domain(args)
 
     freeswitch.consoleLog("info", "user_based_extension " .. tostring(args.destination) .. "\n")
 
@@ -216,8 +220,6 @@ local function  user_based_domain(args)
         freeswitch.consoleLog("err", "[user_based_extension] Missing domain_uuid or destination\n")
         return false
     end
-
-
 
     -- Lookup extension
     local extension = nil
@@ -245,11 +247,10 @@ local function  user_based_domain(args)
     end)
 
     if not extension then
-        freeswitch.consoleLog("err", "[handlers.extensions] No extension_uuid found for  " ..
-            tostring(destination) .. "\n")
+        freeswitch.consoleLog("NOTICE",
+            "[handlers.extensions] No extension_uuid found for  " .. tostring(destination) .. "\n")
         return false
     end
-
 
     return true
 
@@ -286,11 +287,10 @@ local function dispatch(dest)
         return handlers.ivr(args)
     elseif tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
         return handlers.outbound(args)
-    else 
-        return false  -- No matching route found
+    else
+        return false -- No matching route found
     end
 end
-
 
 -- 🚀 Execute
 local routed = dispatch(destination)
@@ -303,7 +303,4 @@ else
     session:execute("sleep", "1000")
     session:execute("playback", "ivr/ivr-no_route_destination.wav")
 end
-
-
-
 

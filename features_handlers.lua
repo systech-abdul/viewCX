@@ -634,7 +634,7 @@ function handlers.handle_did_call(args)
     end
 
 
-    session:execute("info");
+    --session:execute("info");
     local log_message = "[handlers.handle_did_call] Routing args:\n"
     for k, v in pairs(args) do
         log_message = log_message .. string.format("  %s = %s\n", tostring(k), tostring(v))
