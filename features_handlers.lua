@@ -71,7 +71,9 @@ function handlers.extension(args)
     freeswitch.consoleLog("info", "[handlers.extension] Routing to extension: " .. tostring(args.destination) .. "\n")
 
     -- Set codec preferences
-    session:setVariable("codec_string", "PCMU,PCMA,G729")
+    local codec_string = session:getVariable("global_codec_prefs")
+
+    session:setVariable("codec_string", codec_string)
 
     local dest = "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}user/" .. args.destination .. "@" ..
                      args.domain
@@ -89,7 +91,7 @@ function handlers.callcenter(args)
 
     session:answer()
     session:sleep(1000)
-
+     
     if not session:ready() then
         freeswitch.consoleLog("err", "Session not ready for bindDigitAction\n")
         return false
@@ -125,6 +127,7 @@ function handlers.callcenter(args)
 
     session:setVariable("queue_name", queue_data.queue_name or "default")
     session:setVariable("queue", queue)
+    
 
     -- Parse JSON options from queue_flow_json
     local options = {}
@@ -147,7 +150,7 @@ function handlers.callcenter(args)
     if key and type(config) == "table" and config.action and config.value then
         local action = config.action
         local value = config.value
-        local hangup = (config.hangup ~= nil) and config.hangup or true
+        local hangup = config.hangup 
 
         local bind_str = nil
 
@@ -182,7 +185,14 @@ function handlers.callcenter(args)
 
     -- Prepare variables for announcement script
     local queue_announce_frequency = tonumber(queue_data.queue_announce_frequency) or 5000
+    local agent_log = (queue_data.agent_log) 
     local queue_announce_sound = queue_data.queue_announce_sound or "default-sound.wav"
+   
+
+    if agent_log == "t" then
+    -- Run list_agents.lua
+    session:execute("lua", "list_agents.lua")
+    end
 
     -- Run background announcement/prompt Lua
     local api = freeswitch.API()
@@ -650,6 +660,11 @@ function handlers.handle_did_call(args)
     end
 
     session:setVariable("verified_did", "true")
+    freeswitch.consoleLog("info", "[DID ] args.domain_name " .. args.domain_name .. "\n")
+
+    
+    session:setVariable("domain_name", args.domain_name)
+     args.domain = args.domain_name;
 
     local handler_map = {
         extension = handlers.extension,

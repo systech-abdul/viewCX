@@ -12,9 +12,9 @@
     -- SAFELY parse input args
     local encoded_payload = session:getVariable("encoded_payload") or "{}"
     local api_id = tonumber(session:getVariable("api_id"))
-    local should_hangup = session:getVariable("should_hangup") == "true"
+    local should_hangup = session:getVariable("should_hangup") 
 
-    freeswitch.consoleLog("INFO", "[api_handler] api_id: " .. tostring(api_id) .. "\n")
+    freeswitch.consoleLog("CONSOLE", "[api_handler] api_id: " .. tostring(api_id) .. "\nshould_hangup: "..should_hangup.."\n")
 
     
 
@@ -157,7 +157,11 @@
         session:execute("transfer", next_action .. " XML systech")
         
     else
-        freeswitch.consoleLog("WARNING", "[api_handler] No matching key_based_action found in response.\n")
+        freeswitch.consoleLog("ERR", "[api_handler] No matching key_based_action found in response.\n")
+    end
+
+    if should_hangup =="true" then
+      session:hangup("NORMAL_CLEARING");
     end
 
     return true

@@ -6,7 +6,7 @@ local dbh = Database.new("system")
 assert(dbh:connected())
 
 debug["sql"] = false;
-
+session:execute("info") 
 -- Session setup
 session:setVariable("continue_on_fail", "3,17,18,19,20,27,USER_NOT_REGISTERED")
 session:setVariable("hangup_after_bridge", "true")
@@ -15,7 +15,7 @@ session:setVariable("hangup_after_bridge", "true")
 local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
                         session:getVariable("sip_to_user")
 local domain_name = session:getVariable("sip_req_host")
-session:setVariable("domain_name", domain_name)
+session:setVariable("domain_name",domain_name )
 local src = session:getVariable("sip_from_user")
 
 -- Failure prompt playback
@@ -183,7 +183,26 @@ local function is_valid_did(dest)
     end
 
     if found == nil then
-        freeswitch.consoleLog("DEBUG", "[Routing] Match type: No match with DID  Going for Outbound Call \n")
+
+        local fallback_sql = [[
+        SELECT d.domain_uuid, d.domain_name
+        FROM v_did_routes r
+        JOIN v_domains d ON d.domain_uuid = r.domain_uuid
+        WHERE r.did_num = :dest
+          AND r.enabled = true
+        LIMIT 1
+    ]]
+
+    dbh:query(fallback_sql, { dest = tostring(dest) }, function(row)
+        if row.domain_uuid then
+            session:setVariable("domain_uuid", row.domain_uuid)
+            session:setVariable("domain_name", row.domain_name)
+            freeswitch.consoleLog("INFO", "[Routing] Fallback matched DID: " .. dest .. " => Domain: " .. row.domain_name .. " (UUID: " .. row.domain_uuid .. ")\n")
+        end
+    end)
+
+    -- Continue with outbound fallback logic if needed
+       freeswitch.consoleLog("DEBUG", "[Routing] Match type: No match with DID  Going for Outbound Call \n")
     end
 
     -- Check allowed days if any
