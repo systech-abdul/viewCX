@@ -275,8 +275,8 @@ function handlers.ivr(args, counter)
         return false
     end
 
-    local destination = args.destination
-    local domain_uuid = args.domain_uuid
+    local destination = args.destination or session:getVariable("ivr_menu_extension")
+    local domain_uuid = args.domain_uuid or  session:getVariable("domain_uuid")
     local domain = args.domain
     local modified_ivr_id = args.modified_ivr_id or destination
     local visited = args.visited_ivr or {}
@@ -285,7 +285,7 @@ function handlers.ivr(args, counter)
     -- Ensure variable tracking table exists ivr_vars default values 
     lua_ivr_vars = lua_ivr_vars or {}
     
-    --session:execute("info")
+    session:execute("info")
 
 
     local src_phone = session:getVariable("sip_from_user")
@@ -305,7 +305,7 @@ function handlers.ivr(args, counter)
         count = 0
     }
 
-    freeswitch.consoleLog("info", "[handlers.ivr] Routing to IVR: " .. tostring(destination) .. "\n")
+    freeswitch.consoleLog("info", "[handlers.ivr] Routing to IVR: " .. tostring(destination) .." domain_uuid " ..tostring(domain_uuid).. "\n")
 
     -- Fetch IVR config
     local query = [[
@@ -660,13 +660,21 @@ function handlers.handle_did_call(args)
     end
 
     session:setVariable("verified_did", "true")
-    freeswitch.consoleLog("info", "[DID ] args.domain_name " .. args.domain_name .. "\n")
+    local v_did_id = args.destination;
+    freeswitch.consoleLog("info", "[DID ] args.domain_name " .. args.domain_name .." v_did_id "..v_did_id.."\n")
 
     
     session:setVariable("domain_name", args.domain_name)
      args.domain = args.domain_name;
+  
+      
+     if v_did_id then
+        
+        did_ivrs(v_did_id);
+     end
+    
 
-    local handler_map = {
+--[[     local handler_map = {
         extension = handlers.extension,
         callcenter = handlers.callcenter,
         ringgroup = handlers.ringgroup,
@@ -682,10 +690,62 @@ function handlers.handle_did_call(args)
         freeswitch.consoleLog("err", "[handlers.handle_did_call] Unknown destination_type: " ..
             tostring(args.destination_type) .. "\n")
         session:execute("playback", "ivr/ivr-not_available.wav")
+    end ]]
+
+
+
+    return true
+end
+
+
+
+function did_ivrs(id)
+
+
+    -- Prepare args table
+    local args = {}
+
+    -- Single query to join ivrs and v_ivr_menus
+    local sql = string.format([[
+        SELECT menu.ivr_menu_uuid, menu.ivr_menu_extension, menu.domain_uuid
+        FROM v_ivr_menus AS menu
+        JOIN ivrs ON ivrs.start_node = menu.ivr_menu_uuid
+        WHERE ivrs.id = %d
+    ]], id)
+
+    local found = false
+
+    dbh:query(sql, function(row)
+        found = true
+        args.start_node = row.ivr_menu_uuid
+        args.destination = row.ivr_menu_extension
+        args.domain_uuid = row.domain_uuid
+    end)
+
+    
+
+    if found then
+        freeswitch.consoleLog("info", "[did_ivrs] IVR Menu found: " ..
+            "UUID = " .. tostring(args.start_node) ..
+            ", destination = " .. tostring(args.destination) ..
+            ", domain_uuid = " .. tostring(args.domain_uuid) .. "\n")
+
+        -- Call IVR handler with args  
+        
+        
+        session:setVariable("ivr_menu_extension", tostring(args.destination) )
+        handlers.ivr(args)
+    else
+        freeswitch.consoleLog("err", "[did_ivrs] No IVR Menu found for ivrs.id = " .. tostring(id) .. "\n")
+        session:execute("playback", "ivr/ivr-not_available.wav")
     end
 
     return true
 end
+
+
+
+
 
 function timegroup(time_grp_uuid)
 

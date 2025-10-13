@@ -6,7 +6,7 @@ local dbh = Database.new("system")
 assert(dbh:connected())
 
 debug["sql"] = false;
-session:execute("info") 
+--session:execute("info") 
 -- Session setup
 session:setVariable("continue_on_fail", "3,17,18,19,20,27,USER_NOT_REGISTERED")
 session:setVariable("hangup_after_bridge", "true")
