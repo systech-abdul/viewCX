@@ -1,5 +1,5 @@
 -- callcenter-announce-position.lua
--- Usage: luarun callcenter-announce-position.lua <caller_uuid> <queue_name> <interval_ms> <destination_extension>
+-- Usage: luarun callcenter-announce-and-prompt.lua  <caller_uuid> <queue_name> <interval_ms> <destination_extension>
 
 local api = freeswitch.API()
 local caller_uuid = argv[1]
