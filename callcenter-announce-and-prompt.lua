@@ -12,6 +12,11 @@ if not caller_uuid or not queue_name or not mseconds then
     return
 end
 
+if not play_file or play_file == "" then
+    freeswitch.consoleLog("warn", "[CallcenterAnnounce] No play_file provided. Exiting.\n")
+    return
+end
+
 local session = freeswitch.Session(caller_uuid)
 
     
@@ -32,6 +37,7 @@ while true do
                 found = true
 
                 -- Announce queue position
+                api:executeString("uuid_broadcast " .. caller_uuid .. " " .. play_file .." aleg")
                 api:executeString("uuid_broadcast " .. caller_uuid .. " ivr/ivr-you_are_number.wav aleg")
                 api:executeString("uuid_broadcast " .. caller_uuid .. " digits/" .. pos .. ".wav aleg")
 

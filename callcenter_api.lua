@@ -313,56 +313,56 @@ Tier Commands
 Action	Command Example	Description
 
 Add Tier	
-fs_cli -x "luarun callcenter_runner.lua add_tier support_queue 1001 1 1"	Add agent 1001 to queue support_queue with level=1 position=1
+fs_cli -x "luarun callcenter_runner.lua add_tier 4003@cc.systech.ae 1001 1 1"	Add agent 1001 to queue support_queue with level=1 position=1
 
 Delete Tier	
-fs_cli -x "luarun callcenter_runner.lua del_tier support_queue 1001"	Delete agent 1001 from queue support_queue
+fs_cli -x "luarun callcenter_runner.lua del_tier 4003@cc.systech.ae 1001"	Delete agent 1001 from queue support_queue
 
 List Tiers	
 fs_cli -x "luarun callcenter_runner.lua list_tiers"	List all tiers
 
 Set Tier	
-fs_cli -x "luarun callcenter_runner.lua set_tier state support_queue 1001 Ready"	Set agent 1001 state in queue support_queue to "Ready"
+fs_cli -x "luarun callcenter_runner.lua set_tier state  10014003@cc.systech.ae Ready"	Set agent 1001 state in queue support_queue to "Ready"
 Queue Commands
 Action	Command Example	Description
 
 Load Queue	
-fs_cli -x "luarun callcenter_runner.lua load_queue support_queue"	Load queue named support_queue
+fs_cli -x "luarun callcenter_runner.lua load_queue 4003@cc.systech.ae"	Load queue named 4003@cc.systech.ae
 
 Unload Queue	
-fs_cli -x "luarun callcenter_runner.lua unload_queue support_queue"	Unload queue support_queue
+fs_cli -x "luarun callcenter_runner.lua unload_queue 4003@cc.systech.ae"	Unload queue 4003@cc.systech.ae
 
 Reload Queue	
-fs_cli -x "luarun callcenter_runner.lua reload_queue support_queue"	Reload queue support_queue
+fs_cli -x "luarun callcenter_runner.lua reload_queue 4003@cc.systech.ae"	Reload queue 4003@cc.systech.ae
 
 List Queues	
 fs_cli -x "luarun callcenter_runner.lua list_queues"	List all configured queues
 
 List Queue Agents	
-fs_cli -x "luarun callcenter_runner.lua list_queue_agents support_queue"	List agents in support_queue
+fs_cli -x "luarun callcenter_runner.lua list_queue_agents 4003@cc.systech.ae"	List agents in 4003@cc.systech.ae
 
 List Queue Agents	
-fs_cli -x "luarun callcenter_runner.lua list_queue_agents support_queue Ready"	List ready agents in queue
+fs_cli -x "luarun callcenter_runner.lua list_queue_agents 4003@cc.systech.ae Ready"	List ready agents in queue
 
 List Queue Members	
-fs_cli -x "luarun callcenter_runner.lua list_queue_members support_queue"	List callers in support_queue
+fs_cli -x "luarun callcenter_runner.lua list_queue_members 4003@cc.systech.ae"	List callers in 4003@cc.systech.ae
 
 List Queue Tiers	
-fs_cli -x "luarun callcenter_runner.lua list_queue_tiers support_queue"	List tiers in support_queue
+fs_cli -x "luarun callcenter_runner.lua list_queue_tiers 4003@cc.systech.ae"	List tiers in 4003@cc.systech.ae
 
 Count Queues	
 fs_cli -x "luarun callcenter_runner.lua count_queues"	Count total number of queues
 
 Count Queue Agents	
-fs_cli -x "luarun callcenter_runner.lua count_queue_agents support_queue"	Count agents in queue
+fs_cli -x "luarun callcenter_runner.lua count_queue_agents 4003@cc.systech.ae"	Count agents in queue
 
 Count Queue Agents	
-fs_cli -x "luarun callcenter_runner.lua count_queue_agents support_queue Ready"	Count ready agents in queue
+fs_cli -x "luarun callcenter_runner.lua count_queue_agents 4003@cc.systech.ae Ready"	Count ready agents in queue
 
 Count Queue Members	
-fs_cli -x "luarun callcenter_runner.lua count_queue_members support_queue"	Count callers in queue
+fs_cli -x "luarun callcenter_runner.lua count_queue_members 4003@cc.systech.ae"	Count callers in queue
 
 Count Queue Tiers	
-fs_cli -x "luarun callcenter_runner.lua count_queue_tiers support_queue" 
+fs_cli -x "luarun callcenter_runner.lua count_queue_tiers 4003@cc.systech.ae" 
 
 ]]

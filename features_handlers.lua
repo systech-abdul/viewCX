@@ -105,16 +105,22 @@ function handlers.callcenter(args)
     -- Query the database for queue info
     local queue_data = nil
     local sql = [[
-        SELECT *
-        FROM v_call_center_queues
-        WHERE queue_extension = :queue_extension
-          AND domain_uuid = :domain_uuid
+        SELECT 
+            q.*,
+            r.recording_filename
+        FROM v_call_center_queues q
+        LEFT JOIN v_recordings r 
+            ON r.recording_uuid::text = q.queue_announce_sound
+        WHERE q.queue_extension = :queue_extension
+          AND q.domain_uuid = :domain_uuid
         LIMIT 1
     ]]
+
     local params = {
         queue_extension = queue_extension,
         domain_uuid = domain_uuid
     }
+
 
     dbh:query(sql, params, function(row)
         queue_data = row
@@ -186,7 +192,8 @@ function handlers.callcenter(args)
     -- Prepare variables for announcement script
     local queue_announce_frequency = tonumber(queue_data.queue_announce_frequency) or 5000
     local agent_log = (queue_data.agent_log) 
-    local queue_announce_sound = queue_data.queue_announce_sound or "default-sound.wav"
+    
+    
    
 
     if agent_log == "t" then
@@ -195,6 +202,15 @@ function handlers.callcenter(args)
     end
 
     -- Run background announcement/prompt Lua
+  
+  local recording_filename= queue_data.recording_filename 
+  
+  if recording_filename ~= nil and recording_filename ~= '' then
+    local base_path = "/var/lib/freeswitch/recordings/" .. args.domain .. "/"
+    local queue_announce_sound = base_path .. queue_data.recording_filename 
+
+    freeswitch.consoleLog("console", "[CallCenter] queue_announce_sound: " .. tostring(queue_announce_sound) .. "\n")
+
     local api = freeswitch.API()
     api:execute("luarun", string.format(
         "callcenter-announce-and-prompt.lua %s %s %d %s",
@@ -203,6 +219,8 @@ function handlers.callcenter(args)
         queue_announce_frequency,
         queue_announce_sound
     ))
+end
+
 
     -- Transfer to queue
     session:execute("callcenter", queue)
