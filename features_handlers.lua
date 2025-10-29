@@ -731,12 +731,12 @@ function handlers.handle_did_call(args)
     freeswitch.consoleLog("info", log_message)
 
     -- Set caller ID if available
-    if args.caller_id_name then
-        session:setVariable("effective_caller_id_name", args.caller_id_name)
-    end
-    if args.caller_id_number then
-        session:setVariable("effective_caller_id_number", args.caller_id_number)
-    end
+   -- if args.caller_id_name then
+   --     session:setVariable("effective_caller_id_name", args.caller_id_name)
+   -- end
+   -- if args.caller_id_number then
+   --     session:setVariable("effective_caller_id_number", args.caller_id_number)
+   -- end
 
     session:setVariable("verified_did", "true")
     local v_did_id = args.destination;
