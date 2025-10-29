@@ -6,7 +6,7 @@ local handlers = {}
 local Database = require "resources.functions.database"
 local dbh = Database.new('system')
 assert(dbh:connected())
-debug["sql"] = false;
+debug["sql"] = true;
 
 -- Helper: 
 -- session:execute("info") -- Debug info
@@ -546,7 +546,9 @@ function handlers.ivr(args, counter)
  
         elseif action_type == "timegroup" then
  
-            local within_working_time = timegroup(target) -- keep as boolean
+            timegroup(target) -- keep as boolean
+
+           local within_working_time = session:getVariable("timegroup_working")
  
             freeswitch.consoleLog("ERR", "[IVR] Selected input: " .. input .. " | working time: " ..
                 tostring(within_working_time) .. "\n")
@@ -563,6 +565,8 @@ function handlers.ivr(args, counter)
                         LIMIT 1
                     ]]
  
+                freeswitch.consoleLog("notice", "[handlers.timegroup_ivr] SQL: " .. sql .. "\n")
+
             if debug["sql"] then
                 freeswitch.consoleLog("notice", "[handlers.timegroup_ivr] SQL: " .. sql .. "\n")
             end
@@ -581,7 +585,7 @@ function handlers.ivr(args, counter)
             if next(timegroup_data) ~= nil then
                 local destination_type, destination_number
  
-                if within_working_time then
+                if within_working_time =='true' then
                     destination_type = timegroup_data.working_destination_type
                     destination_number = timegroup_data.working_destination_num
                 else
@@ -731,12 +735,12 @@ function handlers.handle_did_call(args)
     freeswitch.consoleLog("info", log_message)
 
     -- Set caller ID if available
-   -- if args.caller_id_name then
-   --     session:setVariable("effective_caller_id_name", args.caller_id_name)
-   -- end
-   -- if args.caller_id_number then
-   --     session:setVariable("effective_caller_id_number", args.caller_id_number)
-   -- end
+--[[     if args.caller_id_name then
+        session:setVariable("effective_caller_id_name", args.caller_id_name)
+    end
+    if args.caller_id_number then
+        session:setVariable("effective_caller_id_number", args.caller_id_number)
+    end ]]
 
     session:setVariable("verified_did", "true")
     local v_did_id = args.destination;
@@ -842,7 +846,7 @@ function timegroup(time_grp_uuid)
             to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
 
             -- Is today a working day?
-            trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum = ANY (working_days) AS is_today_working,
+            trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days) AS is_today_working,
 
             -- Is current time within working hours?
             (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
@@ -894,9 +898,12 @@ function timegroup(time_grp_uuid)
         freeswitch.consoleLog("info", "[timegroup] Routing to: " .. resolved_dest .. "\n")
 
         if working_time == 't' then
-
+        
+            session:setVariable("timegroup_working", "true")
+            freeswitch.consoleLog("info", "[timegroup] is_within_working_time: true ")
             return true
         else
+            session:setVariable("timegroup_working", "false")
             freeswitch.consoleLog("warning",
                 "[timegroup] false time group found for UUID: " .. tostring(time_grp_uuid) .. "\n")
 
