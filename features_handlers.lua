@@ -62,7 +62,7 @@ function getCurrentCount(c)
     return c.count
 end
 
--- Extension (10000–19999)
+-- Extension (1000–3999)
 function handlers.extension(args)
     if not check_session() then
         return false
@@ -82,7 +82,7 @@ function handlers.extension(args)
     return true
 end
 
--- Call Center (20000–29999)
+-- Call Center (4000–4999)
 
 function handlers.callcenter(args)
     if not check_session() then
@@ -232,7 +232,7 @@ end
 
 
 
--- Ring Group (30000–39999)
+-- Ring Group (6000-6999)
 function handlers.ringgroup(args)
     if not check_session() then
         return false
@@ -285,7 +285,7 @@ function handlers.ringgroup(args)
     return true
 end
 
--- IVR handler function for FreeSWITCH (40000–49999)
+-- IVR handler function for FreeSWITCH (7000–7999)
 -- Main IVR Handler
 
 function handlers.ivr(args, counter)
@@ -544,67 +544,11 @@ function handlers.ivr(args, counter)
                 return true
             end
  
+          
         elseif action_type == "timegroup" then
- 
-            timegroup(target) -- keep as boolean
-
-           local within_working_time = session:getVariable("timegroup_working")
- 
-            freeswitch.consoleLog("ERR", "[IVR] Selected input: " .. input .. " | working time: " ..
-                tostring(within_working_time) .. "\n")
- 
-            local sql = [[
-                        SELECT
-                            working_destination_type,
-                            working_destination_num,
-                            failover_destination_type,
-                            failover_destination_num
-                        FROM v_ivr_menu_options
-                        WHERE ivr_menu_uuid = :ivr_menu_uuid
-                          AND ivr_menu_option_digits = :ivr_menu_option_digits
-                        LIMIT 1
-                    ]]
- 
-                freeswitch.consoleLog("notice", "[handlers.timegroup_ivr] SQL: " .. sql .. "\n")
-
-            if debug["sql"] then
-                freeswitch.consoleLog("notice", "[handlers.timegroup_ivr] SQL: " .. sql .. "\n")
-            end
- 
-            local params = {
-                ivr_menu_uuid = ivr_menu_uuid,
-                ivr_menu_option_digits = input
-            }
- 
-            local timegroup_data = {}
-            dbh:query(sql, params, function(row)
-                timegroup_data = row
-            end)
- 
-            -- Wait for result and pick destination
-            if next(timegroup_data) ~= nil then
-                local destination_type, destination_number
- 
-                if within_working_time =='true' then
-                    destination_type = timegroup_data.working_destination_type
-                    destination_number = timegroup_data.working_destination_num
-                else
-                    destination_type = timegroup_data.failover_destination_type
-                    destination_number = timegroup_data.failover_destination_num
-                end
- 
-                -- Log result
-                freeswitch.consoleLog("info", "[IVR] Routing to: " .. tostring(destination_type) .. " - " ..
-                    tostring(destination_number) .. "\n")
-                if destination_type and destination_number then
- 
-                    return session:execute("transfer", destination_number .. " XML systech")
-                end
- 
-            else
-                freeswitch.consoleLog("ERR", "[IVR] No destination found for timegroup option.\n")
-            end
- 
+            timegroup(target, ivr_menu_uuid, input)
+               
+       
         elseif action_type == "hangup" then
             return session:execute("hangup")
  
@@ -637,7 +581,7 @@ function handlers.ivr(args, counter)
             voicemail_handler(target, domain_name, domain_uuid)
  
         elseif action_type == "api" then
-            dynamic_variables = json.encode(lua_ivr_vars or {})
+            --dynamic_variables = json.encode(lua_ivr_vars or {})
             -- freeswitch.consoleLog("info", " lua_ivr_vars" .. (dynamic_variables ) .. "\n");
  
             --api_handler(target, dynamic_variables)
@@ -829,95 +773,164 @@ end
 
 
 
+function timegroup(time_grp_uuid, ivr_menu_uuid, input)
 
-function timegroup(time_grp_uuid)
+    local domain_name=session:getVariable("domain_name")
+    local domain_uuid = session:getVariable("domain_uuid")
+
 
     if not check_session() then
         return false
     end
 
-    freeswitch.consoleLog("info", "[timegroup] Routing to time group: " .. tostring(time_grp_uuid) .. "\n")
+    freeswitch.consoleLog("info", "[timegroup] Processing time group: " .. tostring(time_grp_uuid) .. "\n")
 
-    local sql = [[
-        SELECT 
-            *,
-            -- Convert current timestamp to the row's timezone
-            trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
-            to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
+    -- Step 1: Fetch time group info & determine if within working hours
+    
+    local sql_timegroup = [[
+    SELECT 
+    *,
+    trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
+    to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
 
-            -- Is today a working day?
-            trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days) AS is_today_working,
+    -- Is today a working day?
+    trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
+        string_to_array(trim(both '{}' from working_days), ',')
+    ) AS is_today_working,
 
-            -- Is current time within working hours?
-            (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
-            AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
+    -- Is current time within working hours?
+    (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
+    AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
 
-            -- Final working time check
-            (
-                trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum = ANY (working_days)
-                AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
-            ) AS is_within_working_time,
+    -- Final working time check
+    (
+        trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
+            string_to_array(trim(both '{}' from working_days), ',')
+        )
+        AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
+    ) AS is_within_working_time
 
-            -- Decide the destination
-            CASE
-                WHEN trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum = ANY (working_days)
-                     AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
-                THEN working_destination_num
-                ELSE failover_destination_num
-            END AS resolved_destination
+FROM time_group
+WHERE uuid = :time_grp_uuid
+LIMIT 1;
 
-        FROM time_group
-        WHERE uuid = :time_grp_uuid
-        LIMIT 1;
-    ]]
+]]
 
-    local params = {
-        time_grp_uuid = time_grp_uuid
-    }
+    
+
+    local params_timegroup = { time_grp_uuid = time_grp_uuid }
 
     if debug["sql"] then
-        freeswitch.consoleLog("notice", "[timegroup] SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
+        freeswitch.consoleLog("notice", "[timegroup] SQL: " .. sql_timegroup .. " | Params: " .. json.encode(params_timegroup) .. "\n")
     end
 
+    local within_working_time = "false"
     local found = false
 
-    dbh:query(sql, params, function(row)
+    dbh:query(sql_timegroup, params_timegroup, function(row)
         found = true
-
-        local working_type = row.working_destination_type
-        local working_num = row.working_destination_num
-        local failover_type = row.failover_destination_type
-        local failover_num = row.failover_destination_num
-        local resolved_dest = row.resolved_destination
-        local working_time = tostring(row.is_within_working_time)
-
+        within_working_time = tostring(row.is_within_working_time)
         freeswitch.consoleLog("info", "[timegroup] Timezone: " .. row.time_zone .. "\n")
-        freeswitch.consoleLog("info", "[timegroup] Current Day: " .. row.current_day_trimmed .. ", Time: " ..
-            row.current_time .. "\n")
-        freeswitch.consoleLog("info", "[timegroup] is_within_working_time: " .. working_time .. "\n")
-        freeswitch.consoleLog("info", "[timegroup] Routing to: " .. resolved_dest .. "\n")
-
-        if working_time == 't' then
-        
-            session:setVariable("timegroup_working", "true")
-            freeswitch.consoleLog("info", "[timegroup] is_within_working_time: true ")
-            return true
-        else
-            session:setVariable("timegroup_working", "false")
-            freeswitch.consoleLog("warning",
-                "[timegroup] false time group found for UUID: " .. tostring(time_grp_uuid) .. "\n")
-
-            return false
-        end
-
+        freeswitch.consoleLog("info", "[timegroup] Current Day: " .. row.current_day_trimmed .. ", Time: " .. row.current_time .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] Within working time: " .. within_working_time .. "\n")
     end)
 
     if not found then
-        freeswitch.consoleLog("warning", "[timegroup] No time group found for UUID: " .. tostring(time_grp_uuid) .. "\n")
+        freeswitch.consoleLog("ERR", "[timegroup] No time group found for UUID: " .. tostring(time_grp_uuid) .. "\n")
+        session:setVariable("timegroup_working", "false")
         return false
     end
 
+    -- Step 2: Store session variable
+    if within_working_time == "t" then
+        session:setVariable("timegroup_working", "true")
+        freeswitch.consoleLog("info", "[timegroup] Session var set: timegroup_working = true\n")
+    else
+        session:setVariable("timegroup_working", "false")
+        freeswitch.consoleLog("info", "[timegroup] Session var set: timegroup_working = false\n")
+    end
+
+    -- Step 3: Fetch IVR destination info
+    local sql_ivr = [[
+        SELECT
+            working_destination_type,
+            working_destination_num,
+            failover_destination_type,
+            failover_destination_num
+        FROM v_ivr_menu_options
+        WHERE ivr_menu_uuid = :ivr_menu_uuid
+          AND ivr_menu_option_digits = :ivr_menu_option_digits
+        LIMIT 1;
+    ]]
+
+    local params_ivr = {
+        ivr_menu_uuid = ivr_menu_uuid,
+        ivr_menu_option_digits = input
+    }
+
+    if debug["sql"] then
+        freeswitch.consoleLog("notice", "[timegroup] SQL (IVR lookup): " .. sql_ivr .. "\n")
+    end
+
+    local ivr_data = {}
+    dbh:query(sql_ivr, params_ivr, function(row)
+        ivr_data = row
+    end)
+
+    if next(ivr_data) == nil then
+        freeswitch.consoleLog("ERR", "[timegroup] No IVR destination found for this option.\n")
+        return false
+    end
+
+    -- Step 4: Determine routing based on time group result
+    local destination_type, destination_number,tm_group_routing
+    if within_working_time == "t" or within_working_time == "true" then
+        destination_type = ivr_data.working_destination_type
+        destination_number = ivr_data.working_destination_num
+        tm_group_routing="working timegroup routing"
+    else
+        destination_type = ivr_data.failover_destination_type
+        destination_number = ivr_data.failover_destination_num
+        tm_group_routing="failover timegroup   routing"
+    end
+
+    -- Step 5: Log and transfer
+    freeswitch.consoleLog("info", string.format("[timegroup] Routing to: %s - %s \n",
+        tostring(destination_type), tostring(destination_number)))
+
+     freeswitch.consoleLog("console",  string.format("[timegroup] Routing type %s ",tostring(tm_group_routing)))
+
+    if destination_type and destination_number then
+        
+      if destination_type =="voicemail" then 
+             session:setVariable("destination_number", destination_number)
+            voicemail_handler(destination_number, domain_name, domain_uuid)
+        
+      elseif destination_type =="api" then
+
+        -- dynamic_variables = json.encode(lua_ivr_vars or {})
+       
+        local encoded_payload = json.encode(lua_ivr_vars or {})
+ 
+        session:setVariable("encoded_payload", encoded_payload)
+        session:setVariable("api_id", destination_number)
+        session:setVariable("should_hangup", "false")
+        session:execute("lua", "api_handler.lua")
+ 
+        
+     
+      else
+        session:execute("transfer", destination_number .. " XML systech")
+      end
+
+      
+        return true
+    else
+        freeswitch.consoleLog("ERR", "[timegroup] Destination type/number missing.\n")
+        return false
+    end
 end
+
 
 -- Transfers the call to the given destination number with a specified dialplan context
 function transfer(destination_number, destination_type, context)
