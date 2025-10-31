@@ -357,7 +357,8 @@ function handlers.ivr(args, counter)
             string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits) AS option_key,
             string_agg(op.ivr_menu_option_action || '_' || op.ivr_menu_option_param, ',' ORDER BY op.ivr_menu_option_digits) AS actions,
             m.ivr_menu_greet_long AS greet_long,
-            m.ivr_menu_invalid_sound AS invalid_sound,
+            m.ivr_menu_invalid_sound AS invalid_sound_uuid,
+            r2.recording_filename AS invalid_sound,
             r.recording_filename AS recording_filename,
             m.ivr_menu_exit_sound AS exit_sound,
             1 AS min_digit,
@@ -376,6 +377,7 @@ function handlers.ivr(args, counter)
         JOIN v_domains d ON  d.domain_uuid =  m.domain_uuid
         LEFT join v_recordings r on r.recording_uuid::text = m.ivr_menu_greet_long
         LEFT join v_recordings r1 on r1.recording_uuid::text = m.ivr_menu_greet_short
+        LEFT join v_recordings r2 on r2.recording_uuid::text = m.ivr_menu_invalid_sound
         WHERE m.ivr_menu_extension = :destination AND m.domain_uuid = :domain_uuid
         GROUP BY
             m.ivr_menu_greet_long, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,
@@ -787,36 +789,67 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
 
     -- Step 1: Fetch time group info & determine if within working hours
     
-    local sql_timegroup = [[
-    SELECT 
-    *,
-    trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
-    to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
+--     local sql_timegroup = [[
+--     SELECT 
+--     *,
+--     trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
+--     to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
 
-    -- Is today a working day?
-    trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
-        string_to_array(trim(both '{}' from working_days), ',')
-    ) AS is_today_working,
+--     -- Is today a working day?
+--     trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
+--         string_to_array(trim(both '{}' from working_days), ',')
+--     ) AS is_today_working,
 
-    -- Is current time within working hours?
-    (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
-    AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
+--     -- Is current time within working hours?
+--     (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
+--     AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
 
-    -- Final working time check
-    (
-        trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
-            string_to_array(trim(both '{}' from working_days), ',')
-        )
-        AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
-    ) AS is_within_working_time
+--     -- Final working time check
+--     (
+--         trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
+--             string_to_array(trim(both '{}' from working_days), ',')
+--         )
+--         AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
+--     ) AS is_within_working_time
 
-FROM time_group
-WHERE uuid = :time_grp_uuid
-LIMIT 1;
+-- FROM time_group
+-- WHERE uuid = :time_grp_uuid
+-- LIMIT 1;
 
-]]
+-- ]]
 
-    
+    local sql = [[
+        SELECT 
+            *,
+            -- Convert current timestamp to the row's timezone
+            trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
+            to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
+
+            -- Is today a working day?
+            trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days) AS is_today_working,
+
+            -- Is current time within working hours?
+            (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
+            AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
+
+            -- Final working time check
+            (
+                trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days)
+                AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
+            ) AS is_within_working_time,
+
+            -- Decide the destination
+            CASE
+                WHEN trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days)
+                     AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
+                THEN working_destination_num
+                ELSE failover_destination_num
+            END AS resolved_destination
+
+        FROM time_group
+        WHERE uuid = :time_grp_uuid
+        LIMIT 1;
+    ]]
 
     local params_timegroup = { time_grp_uuid = time_grp_uuid }
 
