@@ -380,7 +380,7 @@ function handlers.ivr(args, counter)
         LEFT join v_recordings r2 on r2.recording_uuid::text = m.ivr_menu_invalid_sound
         WHERE m.ivr_menu_extension = :destination AND m.domain_uuid = :domain_uuid
         GROUP BY
-            m.ivr_menu_greet_long, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,
+            m.ivr_menu_greet_long, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,r2.recording_filename,
             m.ivr_menu_confirm_macro, m.ivr_menu_name,m.ivr_menu_uuid,r.recording_filename
     ]]
     local ivr_data = {}
