@@ -62,6 +62,50 @@ function getCurrentCount(c)
     return c.count
 end
 
+
+
+-- Common function to fetch IVR destinations
+function get_ivr_type_and_destination(ivr_menu_uuid, ivr_menu_option_digits)
+    local sql_ivr = [[
+        SELECT
+            working_destination_type,
+            working_destination_num,
+            failover_destination_type,
+            failover_destination_num
+        FROM v_ivr_menu_options
+        WHERE ivr_menu_uuid = :ivr_menu_uuid
+          AND ivr_menu_option_digits = :ivr_menu_option_digits
+        LIMIT 1;
+    ]]
+
+    local params_ivr = {
+        ivr_menu_uuid = ivr_menu_uuid,
+        ivr_menu_option_digits = ivr_menu_option_digits
+    }
+
+    if debug and debug["sql"] then
+        freeswitch.consoleLog("notice", "[get_ivr_type_and_destination] SQL: " .. sql_ivr .. " | Params: " .. json.encode(params_ivr) .. "\n")
+    end
+
+    local ivr_data = {}
+    local found = false
+
+    dbh:query(sql_ivr, params_ivr, function(row)
+        ivr_data = row
+        found = true
+    end)
+
+    if not found then
+        freeswitch.consoleLog("ERR", "[get_ivr_type_and_destination] No IVR destination found for UUID: " .. tostring(ivr_menu_uuid) .. " digits: " .. tostring(ivr_menu_option_digits) .. "\n")
+        return nil
+    end
+
+    return ivr_data
+end
+
+
+
+
 -- Extension (1000–3999)
 function handlers.extension(args)
     if not check_session() then
@@ -591,10 +635,21 @@ function handlers.ivr(args, counter)
         session:setVariable("encoded_payload", encoded_payload)
         session:setVariable("api_id", target)
         session:setVariable("should_hangup", "false")
+        session:setVariable("ivr_menu_uuid", ivr_menu_uuid)
         session:execute("lua", "api_handler.lua")
- 
- 
- 
+        local api_match_action=session:getVariable("api_match_action")
+        if api_match_action and api_match_action =="no_match" then 
+        freeswitch.consoleLog("console", "[ivr_handler] out of api function..    ."..tostring(api_match_action))
+        local ivr_data = get_ivr_type_and_destination(ivr_menu_uuid, input)
+        if not ivr_data then
+            return false
+        end
+
+        local destination_number = ivr_data.failover_destination_num
+        session:execute("transfer", destination_number .. " XML systech") 
+
+        end
+
         else
             session:execute("playback", exit_sound_path)
         end
@@ -604,7 +659,6 @@ function handlers.ivr(args, counter)
  
     return true
 end
-
 
 
 
@@ -679,14 +733,6 @@ function handlers.handle_did_call(args)
     end
     freeswitch.consoleLog("info", log_message)
 
-    -- Set caller ID if available
---[[     if args.caller_id_name then
-        session:setVariable("effective_caller_id_name", args.caller_id_name)
-    end
-    if args.caller_id_number then
-        session:setVariable("effective_caller_id_number", args.caller_id_number)
-    end ]]
-
     session:setVariable("verified_did", "true")
     local v_did_id = args.destination;
     freeswitch.consoleLog("info", "[DID ] args.domain_name " .. args.domain_name .." v_did_id "..v_did_id.."\n")
@@ -701,77 +747,8 @@ function handlers.handle_did_call(args)
         did_ivrs(v_did_id);
      end
     
-
---[[     local handler_map = {
-        extension = handlers.extension,
-        callcenter = handlers.callcenter,
-        ringgroup = handlers.ringgroup,
-        ivr = handlers.ivr,
-        outbound = handlers.outbound
-    }
-
-    local handler = handler_map[args.destination_type]
-
-    if handler then
-        local result = handler(args)
-    else
-        freeswitch.consoleLog("err", "[handlers.handle_did_call] Unknown destination_type: " ..
-            tostring(args.destination_type) .. "\n")
-        session:execute("playback", "ivr/ivr-not_available.wav")
-    end ]]
-
-
-
     return true
 end
-
-
-
-function did_ivrs(id)
-
-
-    -- Prepare args table
-    local args = {}
-
-    -- Single query to join ivrs and v_ivr_menus
-    local sql = string.format([[
-        SELECT menu.ivr_menu_uuid, menu.ivr_menu_extension, menu.domain_uuid
-        FROM v_ivr_menus AS menu
-        JOIN ivrs ON ivrs.start_node = menu.ivr_menu_uuid
-        WHERE ivrs.id = %d
-    ]], id)
-
-    local found = false
-
-    dbh:query(sql, function(row)
-        found = true
-        args.start_node = row.ivr_menu_uuid
-        args.destination = row.ivr_menu_extension
-        args.domain_uuid = row.domain_uuid
-    end)
-
-    
-
-    if found then
-        freeswitch.consoleLog("info", "[did_ivrs] IVR Menu found: " ..
-            "UUID = " .. tostring(args.start_node) ..
-            ", destination = " .. tostring(args.destination) ..
-            ", domain_uuid = " .. tostring(args.domain_uuid) .. "\n")
-
-        -- Call IVR handler with args  
-        
-        
-        session:setVariable("ivr_menu_extension", tostring(args.destination) )
-        handlers.ivr(args)
-    else
-        freeswitch.consoleLog("err", "[did_ivrs] No IVR Menu found for ivrs.id = " .. tostring(id) .. "\n")
-        session:execute("playback", "ivr/ivr-not_available.wav")
-    end
-
-    return true
-end
-
-
 
 
 function timegroup(time_grp_uuid, ivr_menu_uuid, input)
@@ -846,38 +823,11 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
     --------------------------------------------------------------------
     -- Step 3: Fetch IVR destination info
     --------------------------------------------------------------------
-    local sql_ivr = [[
-        SELECT
-            working_destination_type,
-            working_destination_num,
-            failover_destination_type,
-            failover_destination_num
-        FROM v_ivr_menu_options
-        WHERE ivr_menu_uuid = :ivr_menu_uuid
-          AND ivr_menu_option_digits = :ivr_menu_option_digits
-        LIMIT 1;
-    ]]
-
-    local params_ivr = {
-        ivr_menu_uuid = ivr_menu_uuid,
-        ivr_menu_option_digits = input
-    }
-
-    if debug["sql"] then
-        freeswitch.consoleLog("notice", "[timegroup] SQL (IVR lookup): " .. sql_ivr .. "\n")
-    end
-
-    local ivr_data = {}
-    dbh:query(sql_ivr, params_ivr, function(row)
-        ivr_data = row
-    end)
-
-    if next(ivr_data) == nil then
-        freeswitch.consoleLog("ERR", "[timegroup] No IVR destination found for this option.\n")
-        return false
-    end
-
-    --------------------------------------------------------------------
+        local ivr_data = get_ivr_type_and_destination(ivr_menu_uuid, input)
+        if not ivr_data then
+            return false
+        end
+    ------------------------------------------------------------------
     -- Step 4: Determine routing based on time group result
     --------------------------------------------------------------------
     local destination_type, destination_number, tm_group_routing
@@ -956,35 +906,52 @@ end
 
 
 
+function did_ivrs(id)
 
 
--- Transfers the call to the given destination number with a specified dialplan context
-function transfer(destination_number, destination_type, context)
-    if not session:ready() then
-        freeswitch.consoleLog("ERR", "[transfer] Session not ready\n")
-        return false
-    end
+    -- Prepare args table
+    local args = {}
 
-    -- Log transfer info
-    freeswitch.consoleLog("INFO",
-        string.format("[transfer] Transferring to %s (%s) in context %s\n", tostring(destination_number),
-            tostring(destination_type), tostring(context)))
+    -- Single query to join ivrs and v_ivr_menus
+    local sql = string.format([[
+        SELECT menu.ivr_menu_uuid, menu.ivr_menu_extension, menu.domain_uuid
+        FROM v_ivr_menus AS menu
+        JOIN ivrs ON ivrs.start_node = menu.ivr_menu_uuid
+        WHERE ivrs.id = %d
+    ]], id)
 
-    -- Compose the transfer string
-    -- Format: <number>@<context>
-    -- If you have destination_type (like 'sip', 'user', etc), you may prepend it to number
-    local dial_string
-    if destination_type and destination_type ~= "" then
-        dial_string = destination_type .. "/" .. destination_number
+    local found = false
+
+    dbh:query(sql, function(row)
+        found = true
+        args.start_node = row.ivr_menu_uuid
+        args.destination = row.ivr_menu_extension
+        args.domain_uuid = row.domain_uuid
+    end)
+
+    
+
+    if found then
+        freeswitch.consoleLog("info", "[did_ivrs] IVR Menu found: " ..
+            "UUID = " .. tostring(args.start_node) ..
+            ", destination = " .. tostring(args.destination) ..
+            ", domain_uuid = " .. tostring(args.domain_uuid) .. "\n")
+
+        -- Call IVR handler with args  
+        
+        
+        session:setVariable("ivr_menu_extension", tostring(args.destination) )
+        handlers.ivr(args)
     else
-        dial_string = destination_number
+        freeswitch.consoleLog("err", "[did_ivrs] No IVR Menu found for ivrs.id = " .. tostring(id) .. "\n")
+        session:execute("playback", "ivr/ivr-not_available.wav")
     end
-
-    -- Transfer the call
-    session:execute("transfer", dial_string .. " XML " .. context)
 
     return true
 end
+
+
+
 
 function voicemail_handler(destination_number, domain_name, domain_uuid)
     if not session:ready() then
@@ -1030,157 +997,6 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
 
     return true
 end
-
-
---[[ 
-function api_handler(api_id, dynamic_payload)
-    if not check_session() then
-        return false
-    end
-
-    local api = freeswitch.API()
-
-    -- Step 1: Fetch API settings from DB
-    local api_settings = nil
-    local sql = string.format("SELECT * FROM api_settings WHERE enable = true AND id = %d LIMIT 1", tonumber(api_id))
-    dbh:query(sql, function(row)
-        api_settings = row
-    end)
-
-    if not api_settings then
-        freeswitch.consoleLog("ERR", "[api_handler] No enabled API settings found for ID: " .. tostring(api_id) .. "\n")
-        return false
-    end
-
-    -- Step 2: Parse API settings
-    local endpoint = api_settings.endpoint or ""
-    local method = string.lower(api_settings.method or "post")
-    local headers = json.decode(api_settings.headers or "{}") or {}
-    local static_payload = json.decode(api_settings.payload or "{}") or {}
-    local key_based_actions = json.decode(api_settings.key_based_actions or "{}") or {}
-
-    local auth_enabled = api_settings.authentication == "true" or api_settings.authentication == true
-    local username = api_settings.username
-    local password = api_settings.password
-    local token = api_settings.token
-
-    local api_name = api_settings.name or "API Call"
-    local api_type = api_settings["type"] or "REST"
-
-    -- Step 3: Merge dynamic_payload into static_payload
-    local dynamic_data = json.decode(dynamic_payload or "{}") or {}
-    static_payload["variables"] = dynamic_data
-
-    local final_payload = static_payload
-    local json_payload = json.encode(final_payload)
-
-    -- Step 4: Authentication
-    if auth_enabled then
-        if token and token ~= "" then
-            headers["Authorization"] = "Bearer " .. token
-        elseif username and password then
-            local b64 = require("resources.functions.base64")
-            local auth_str = b64.encode(username .. ":" .. password)
-            headers["Authorization"] = "Basic " .. auth_str
-        else
-            freeswitch.consoleLog("ERR", "[api_handler] Auth enabled but missing credentials/token.\n")
-            return false
-        end
-    end
-
-    -- Step 5: Prepare headers
-    local header_str = ""
-    for k, v in pairs(headers) do
-        header_str = header_str .. k .. ": " .. tostring(v) .. ","
-    end
-    header_str = header_str:gsub(",$", "")
-
-    -- Step 6: Set curl variables
-    session:setVariable("curl_timeout", "10")
-    if header_str ~= "" then
-        session:setVariable("curl_headers", header_str)
-    end
-    if method == "post" or method == "put" or method == "patch" then
-        session:setVariable("curl_post_data", json_payload)
-    end
-
-    -- Step 7: Execute curl
-    session:execute("curl", endpoint .. " json " .. method)
-
-    -- Step 8: Capture response
-    local status_code = session:getVariable("curl_response_code") or "nil"
-    local response_data = session:getVariable("curl_response_data") or "nil"
-
-    -- Step 9: Log request/response
-    freeswitch.consoleLog("INFO", "[api_handler] --- API Call: " .. api_name .. " ---\n")
-    freeswitch.consoleLog("INFO", "[api_handler] URL: " .. endpoint .. "\n")
-    freeswitch.consoleLog("INFO", "[api_handler] Method: " .. method:upper() .. "\n")
-    freeswitch.consoleLog("INFO", "[api_handler] Headers: " .. header_str .. "\n")
-    freeswitch.consoleLog("INFO", "[api_handler] Payload: " .. json_payload .. "\n")
-    freeswitch.consoleLog("INFO", "[api_handler] Status Code: " .. status_code .. "\n")
-    freeswitch.consoleLog("INFO", "[api_handler] Response Data: " .. response_data .. "\n")
-
-    -- Step 10: Handle key_based_actions
-    local next_action = nil
-    local decoded_response = {}
-
-    -- Try decoding the top-level response
-    local ok1, top = pcall(json.decode, response_data or "{}")
-    if ok1 and type(top) == "table" then
-        -- If it has a 'body' field that's a JSON string, decode it too
-        if top["body"] and type(top["body"]) == "string" then
-            freeswitch.consoleLog("DEBUG", "[api_handler] Detected nested 'body' field in response, decoding...\n")
-            local ok2, inner = pcall(json.decode, top["body"])
-            if ok2 and type(inner) == "table" then
-                decoded_response = inner
-                freeswitch.consoleLog("DEBUG", "[api_handler] Decoded body content: " .. json.encode(decoded_response) .. "\n")
-            else
-                freeswitch.consoleLog("ERR", "[api_handler] Failed to decode 'body' as JSON.\n")
-                decoded_response = top
-            end
-        else
-            decoded_response = top
-        end
-    else
-        freeswitch.consoleLog("ERR", "[api_handler] Failed to decode API response as JSON.\n")
-        return false
-    end
-
-    -- Match key_based_actions intelligently for nested values
-    for key, mappings in pairs(key_based_actions) do
-        local val = decoded_response[key]
-        if val then
-            if type(val) == "string" then
-                -- Simple string match
-                if mappings[val] then
-                    next_action = mappings[val]
-                    break
-                end
-            elseif type(val) == "table" then
-                -- val is a nested table, check which key is truthy in val and also exists in mappings
-                for subkey, subval in pairs(val) do
-                    if subval and mappings[subkey] then
-                        next_action = mappings[subkey]
-                        break
-                    end
-                end
-                if next_action then break end
-            end
-        end
-    end
-
-    -- Execute next action if matched
-    if next_action then
-        freeswitch.consoleLog("INFO", "[api_handler] Next Action (from key_based_actions): " .. tostring(next_action) .. "\n")
-
-        session:execute("transfer", next_action .. " XML systech")
-        
-    else
-        freeswitch.consoleLog("WARNING", "[api_handler] No matching key_based_action found in response.\n")
-    end
-
-    return true
-end ]]
 
 
 return handlers
