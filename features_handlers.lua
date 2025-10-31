@@ -357,8 +357,7 @@ function handlers.ivr(args, counter)
             string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits) AS option_key,
             string_agg(op.ivr_menu_option_action || '_' || op.ivr_menu_option_param, ',' ORDER BY op.ivr_menu_option_digits) AS actions,
             m.ivr_menu_greet_long AS greet_long,
-            m.ivr_menu_invalid_sound AS invalid_sound_uuid,
-            r2.recording_filename AS invalid_sound,
+            m.ivr_menu_invalid_sound AS invalid_sound,
             r.recording_filename AS recording_filename,
             m.ivr_menu_exit_sound AS exit_sound,
             1 AS min_digit,
@@ -377,10 +376,9 @@ function handlers.ivr(args, counter)
         JOIN v_domains d ON  d.domain_uuid =  m.domain_uuid
         LEFT join v_recordings r on r.recording_uuid::text = m.ivr_menu_greet_long
         LEFT join v_recordings r1 on r1.recording_uuid::text = m.ivr_menu_greet_short
-        LEFT join v_recordings r2 on r2.recording_uuid::text = m.ivr_menu_invalid_sound
         WHERE m.ivr_menu_extension = :destination AND m.domain_uuid = :domain_uuid
         GROUP BY
-            m.ivr_menu_greet_long, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,r2.recording_filename,
+            m.ivr_menu_greet_long, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,
             m.ivr_menu_confirm_macro, m.ivr_menu_name,m.ivr_menu_uuid,r.recording_filename
     ]]
     local ivr_data = {}
@@ -562,6 +560,7 @@ function handlers.ivr(args, counter)
                 return true
             end
             session:execute("lua", target)
+           
             args.modified_ivr_id = modified_ivr_id
             args.destination = destination
             args.visited_ivr = visited
@@ -776,76 +775,35 @@ end
 
 
 function timegroup(time_grp_uuid, ivr_menu_uuid, input)
-
-    local domain_name=session:getVariable("domain_name")
-    local domain_uuid = session:getVariable("domain_uuid")
-
-
     if not check_session() then
         return false
     end
 
+    local domain_name = session:getVariable("domain_name")
+    local domain_uuid = session:getVariable("domain_uuid")
+
     freeswitch.consoleLog("info", "[timegroup] Processing time group: " .. tostring(time_grp_uuid) .. "\n")
 
+    --------------------------------------------------------------------
     -- Step 1: Fetch time group info & determine if within working hours
-    
---     local sql_timegroup = [[
---     SELECT 
---     *,
---     trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
---     to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
+    --------------------------------------------------------------------
 
---     -- Is today a working day?
---     trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
---         string_to_array(trim(both '{}' from working_days), ',')
---     ) AS is_today_working,
-
---     -- Is current time within working hours?
---     (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
---     AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
-
---     -- Final working time check
---     (
---         trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
---             string_to_array(trim(both '{}' from working_days), ',')
---         )
---         AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
---     ) AS is_within_working_time
-
--- FROM time_group
--- WHERE uuid = :time_grp_uuid
--- LIMIT 1;
-
--- ]]
-
-    local sql = [[
+    local sql_timegroup = [[
         SELECT 
             *,
-            -- Convert current timestamp to the row's timezone
             trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
             to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
-
-            -- Is today a working day?
-            trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days) AS is_today_working,
-
-            -- Is current time within working hours?
-            (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time >= working_time_start 
-            AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time <= working_time_end AS is_time_in_range,
-
-            -- Final working time check
+            trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
+                string_to_array(trim(both '{}' from working_days), ',')
+            ) AS is_today_working,
+            (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end AS is_time_in_range,
             (
-                trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days)
-                AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
-            ) AS is_within_working_time,
-
-            -- Decide the destination
-            CASE
-                WHEN trim(to_char(now() AT TIME ZONE time_zone, 'Day'))::weekday_enum::text = ANY (working_days)
-                     AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end
-                THEN working_destination_num
-                ELSE failover_destination_num
-            END AS resolved_destination
-
+                trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
+                    string_to_array(trim(both '{}' from working_days), ',')
+                )
+                AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time 
+                    BETWEEN working_time_start AND working_time_end
+            ) AS is_within_working_time
         FROM time_group
         WHERE uuid = :time_grp_uuid
         LIMIT 1;
@@ -874,8 +832,10 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
         return false
     end
 
+    --------------------------------------------------------------------
     -- Step 2: Store session variable
-    if within_working_time == "t" then
+    --------------------------------------------------------------------
+    if within_working_time == "t" or within_working_time == "true" then
         session:setVariable("timegroup_working", "true")
         freeswitch.consoleLog("info", "[timegroup] Session var set: timegroup_working = true\n")
     else
@@ -883,7 +843,9 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
         freeswitch.consoleLog("info", "[timegroup] Session var set: timegroup_working = false\n")
     end
 
+    --------------------------------------------------------------------
     -- Step 3: Fetch IVR destination info
+    --------------------------------------------------------------------
     local sql_ivr = [[
         SELECT
             working_destination_type,
@@ -915,54 +877,85 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
         return false
     end
 
+    --------------------------------------------------------------------
     -- Step 4: Determine routing based on time group result
-    local destination_type, destination_number,tm_group_routing
+    --------------------------------------------------------------------
+    local destination_type, destination_number, tm_group_routing
+
     if within_working_time == "t" or within_working_time == "true" then
         destination_type = ivr_data.working_destination_type
         destination_number = ivr_data.working_destination_num
-        tm_group_routing="working timegroup routing"
+        tm_group_routing = "working timegroup routing"
     else
         destination_type = ivr_data.failover_destination_type
         destination_number = ivr_data.failover_destination_num
-        tm_group_routing="failover timegroup   routing"
+        tm_group_routing = "failover timegroup routing"
     end
 
+    --------------------------------------------------------------------
     -- Step 5: Log and transfer
-    freeswitch.consoleLog("info", string.format("[timegroup] Routing to: %s - %s \n",
-        tostring(destination_type), tostring(destination_number)))
+    --------------------------------------------------------------------
+    freeswitch.consoleLog("info", string.format("[timegroup] Routing to: %s - %s\n", tostring(destination_type), tostring(destination_number)))
+    freeswitch.consoleLog("info", string.format("[timegroup] Routing type: %s\n", tostring(tm_group_routing)))
 
-     freeswitch.consoleLog("console",  string.format("[timegroup] Routing type %s ",tostring(tm_group_routing)))
+    if not (destination_type and destination_number) then
+        freeswitch.consoleLog("ERR", "[timegroup] Destination type/number missing.\n")
+        return false
+    end
 
-    if destination_type and destination_number then
-        
-      if destination_type =="voicemail" then 
-             session:setVariable("destination_number", destination_number)
-            voicemail_handler(destination_number, domain_name, domain_uuid)
-        
-      elseif destination_type =="api" then
+    -- Handle routing actions
+    if destination_type == "voicemail" then
+        session:setVariable("destination_number", destination_number)
+        voicemail_handler(destination_number, domain_name, domain_uuid)
 
-        -- dynamic_variables = json.encode(lua_ivr_vars or {})
-       
+    elseif destination_type == "api" then
         local encoded_payload = json.encode(lua_ivr_vars or {})
- 
         session:setVariable("encoded_payload", encoded_payload)
         session:setVariable("api_id", destination_number)
         session:setVariable("should_hangup", "false")
         session:execute("lua", "api_handler.lua")
- 
-        
-     
-      else
-        session:execute("transfer", destination_number .. " XML systech")
-      end
 
-      
-        return true
+    elseif destination_type == "hangup" then
+        session:execute("hangup")
+
+    elseif destination_type == "playback" then
+        local sql_playback = [[
+            SELECT recording_filename
+            FROM v_recordings
+            WHERE recording_uuid = :recording_uuid
+            LIMIT 1;
+        ]]
+        local params_playback = { recording_uuid = destination_number }
+        local recording_filename
+
+        dbh:query(sql_playback, params_playback, function(row)
+            recording_filename = row.recording_filename
+        end)
+
+        if recording_filename and recording_filename ~= '' then
+            local base_path = "/var/lib/freeswitch/recordings/" .. domain_name .. "/"
+            local play_sound = base_path .. recording_filename
+            session:execute("playback", play_sound)
+        else
+            freeswitch.consoleLog("ERR", "[timegroup] Recording not found for playback.\n")
+        end
+
+    elseif destination_type == "lua" then
+        session:execute("lua", destination_number)
+
+    elseif destination_type == "backtoivr" then 
+
+      freeswitch.consoleLog("ERR", "[timegroup] backtoivr  not found in Time group.\n")
+
     else
-        freeswitch.consoleLog("ERR", "[timegroup] Destination type/number missing.\n")
-        return false
+        session:execute("transfer", destination_number .. " XML systech")
     end
+
+    return true
 end
+
+
+
 
 
 -- Transfers the call to the given destination number with a specified dialplan context
@@ -1191,4 +1184,3 @@ end ]]
 
 
 return handlers
-
