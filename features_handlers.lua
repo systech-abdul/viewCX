@@ -315,7 +315,7 @@ function handlers.callcenter(args)
 
     if agent_log == "t" then
     -- Run list_agents.lua
-    session:execute("lua", "list_agents.lua")
+    session:execute("lua", "list_agents.lua " .. queue)
     end
 
     -- Run background announcement/prompt Lua
