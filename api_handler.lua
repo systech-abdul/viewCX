@@ -59,10 +59,11 @@ local encoded_payload = session:getVariable("encoded_payload") or "{}"
 local api_id = tonumber(session:getVariable("api_id"))
 local ivr_menu_uuid = tonumber(session:getVariable("ivr_menu_uuid"))
 local should_hangup = session:getVariable("should_hangup")
+local call_uuid = session:getVariable("uuid")
 
 freeswitch.consoleLog("INFO",
-    string.format("[api_handler] api_id=%s | should_hangup=%s | encoded_payload=%s\n",
-        tostring(api_id), tostring(should_hangup), tostring(encoded_payload))
+    string.format("[api_handler] api_id=%s | call_uuid=%s | should_hangup=%s | encoded_payload=%s\n",
+        tostring(api_id), tostring(call_uuid), tostring(should_hangup), tostring(encoded_payload))
 )
 
 -- --------------------------------------------------------------
@@ -168,6 +169,48 @@ else
     return false
 end
 
+-- --------------------------------------------------------------
+-- Step 8.1: Merge payload and reponse data
+-- --------------------------------------------------------------
+
+-- Helper to merge tables deeply
+local function merge_tables(t1, t2)
+    for k, v in pairs(t2) do
+        if type(v) == "table" and type(t1[k]) == "table" then
+            merge_tables(t1[k], v)
+        else
+            t1[k] = v
+        end
+    end
+    return t1
+end
+
+-- Merge response data into your variables table
+local merged_data = merge_tables(dynamic_data, decoded_response)
+
+-- Encode to JSON for logging or further use
+local merged_json = json.encode(merged_data)
+freeswitch.consoleLog("INFO", "[api_handler] Merged Data: " .. merged_json .. "\n")
+
+
+if call_uuid and merged_json then
+    local update_sql = string.format(
+        "UPDATE call_ivr_journeys SET variables = '%s', updated_at = NOW() WHERE call_uuid = '%s'",
+        dbh:escape(merged_json),
+        dbh:escape(call_uuid)
+    )
+
+    freeswitch.consoleLog("INFO", "[api_handler] Updating ivr_journey -> " .. update_sql .. "\n")
+
+    local status = dbh:query(update_sql)
+    if status then
+        freeswitch.consoleLog("INFO", "[api_handler] ivr_journey updated successfully.\n")
+    else
+        freeswitch.consoleLog("ERR", "[api_handler] Failed to update ivr_journey.\n")
+    end
+else
+    freeswitch.consoleLog("ERR", "[api_handler] Missing ivr_journey_uuid or merged_json.\n")
+end
 -- --------------------------------------------------------------
 -- Step 9: Apply key-based matching (compare against API response)
 -- --------------------------------------------------------------
