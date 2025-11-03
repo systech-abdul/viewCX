@@ -136,6 +136,93 @@ end
 
 
 
+function find_matching_condition(node_id, domain_name, domain_uuid, ivr_menu_uuid)
+    if not node_id then
+        freeswitch.consoleLog("ERR", "[find_matching_condition] Missing node_id\n")
+        return
+    end
+
+    -- SQL query to fetch JSON conditions
+    local sql = [[
+        SELECT key_based_actions
+        FROM ivr_condition_node
+        WHERE id = :id AND enable = true AND is_active = true
+        LIMIT 1;
+    ]]
+    local params = { id = node_id }
+
+    -- 🪶 DEBUG: Print the SQL for verification
+    local debug_sql = string.gsub(sql, ":id", tostring(node_id))
+    freeswitch.consoleLog("INFO", "[find_matching_condition] Executing SQL: " .. debug_sql .. "\n")
+
+    local condition_json
+
+    -- Execute query
+    dbh:query(sql, params, function(row)
+        condition_json = row.key_based_actions
+    end)
+
+    -- Check if data fetched
+    if not condition_json or condition_json == '' then
+        freeswitch.consoleLog("ERR", "[find_matching_condition] No conditions found for node_id " .. tostring(node_id) .. "\n")
+        return
+    end
+
+    -- Collect runtime caller/session data as JSON
+    local data = {
+        name = session:getVariable("caller_name") or "",
+        digits = session:getVariable("digits") or "",
+        destination_number = session:getVariable("destination_number") or ""
+    }
+    local data_json = json.encode(data)
+
+    -- Decode JSON safely
+    local ok1, conditions = pcall(json.decode, condition_json or "[]")
+    local ok2, data_table = pcall(json.decode, data_json or "{}")
+
+    if not ok1 or not ok2 then
+        freeswitch.consoleLog("ERR", "[find_matching_condition] Invalid JSON structure\n")
+        return
+    end
+
+    -- Normalize single object to array
+    if conditions and type(conditions) == "table" and conditions.key then
+        conditions = { conditions }
+    end
+
+    local match_action, match_destination
+
+    -- Evaluate conditions
+    for _, cond in ipairs(conditions or {}) do
+        local key = cond.key
+        local value_in_data = data_table[key]
+
+        if value_in_data ~= nil then
+            if cond.condition == "equal" and tostring(value_in_data) == tostring(cond.string) then
+                match_action = cond.action
+                match_destination = cond.destination
+                freeswitch.consoleLog("INFO", string.format(
+                    "[find_matching_condition] Matched: key=%s value=%s → destination=%s\n",
+                    key, value_in_data, cond.destination
+                ))
+                break
+            end
+        end
+    end
+
+    -- Fallback if no match found
+    if not match_action or not match_destination then
+        match_action = "no_match"
+        match_destination = "fall_back"
+        freeswitch.consoleLog("WARNING", "[find_matching_condition] No match found, using fallback.\n")
+        return false;
+    end
+
+    -- Route using the common handler
+    route_action(match_action, match_destination, domain_name, domain_uuid, ivr_menu_uuid)
+end
+
+
 
 
 
@@ -479,48 +566,41 @@ end
 
 -- IVR handler function for FreeSWITCH (7000–7999)
 -- Main IVR Handler
-
 function handlers.ivr(args, counter)
     if not check_session() then
         return false
     end
- 
+
     local destination = args.destination or session:getVariable("ivr_menu_extension")
-    local domain_uuid = args.domain_uuid or  session:getVariable("domain_uuid")
+    local domain_uuid = args.domain_uuid or session:getVariable("domain_uuid")
     local domain = args.domain
     local modified_ivr_id = args.modified_ivr_id or destination
     local visited = args.visited_ivr or {}
     local MAX_PATH_STEPS = 20
- 
-    -- Ensure variable tracking table exists ivr_vars default values
+
     lua_ivr_vars = lua_ivr_vars or {}
-   
-    --session:execute("info")
- 
- 
+
+    -- Caller info
     local src_phone = session:getVariable("sip_from_user")
-    local dest_phone = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
-                           session:getVariable("sip_to_user")
+    local dest_phone = session:getVariable("destination_number") or session:getVariable("sip_req_user") or session:getVariable("sip_to_user")
     local call_start_time = session:getVariable("start_stamp")
     local call_uuid = session:getVariable("uuid")
- 
+
     lua_ivr_vars["src_phone"] = src_phone
     lua_ivr_vars["dest_phone"] = dest_phone
     lua_ivr_vars["call_start_time"] = call_start_time
     lua_ivr_vars["call_uuid"] = call_uuid
- 
-    -- for ivr journey path
+
     args.ivr_path = args.ivr_path or {}
-    counter = counter or {
-        count = 0
-    }
- 
-    freeswitch.consoleLog("info", "[handlers.ivr] Routing to IVR: " .. tostring(destination) .." domain_uuid " ..tostring(domain_uuid).. "\n")
- 
+    counter = counter or { count = 0 }
+
+    freeswitch.consoleLog("INFO", string.format("[IVR] Routing to %s domain_uuid %s\n", tostring(destination), tostring(domain_uuid)))
+
+    -- === SQL Query ===
     local query = [[
         SELECT
-            string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits) AS option_key,
-            string_agg(op.ivr_menu_option_action || '_' || op.ivr_menu_option_param, ',' ORDER BY op.ivr_menu_option_digits) AS actions,
+            COALESCE(string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits), '') AS option_key,
+            COALESCE(string_agg(op.ivr_menu_option_action || '_' || op.ivr_menu_option_param, ',' ORDER BY op.ivr_menu_option_digits), '') AS actions,
             m.ivr_menu_greet_long AS greet_long,
             m.ivr_menu_invalid_sound AS invalid_sound,
             r.recording_filename AS recording_filename,
@@ -533,281 +613,209 @@ function handlers.ivr(args, counter)
             m.ivr_menu_confirm_macro,
             m.ivr_menu_name AS name,
             MIN(op.preferred_gateway_uuid::text) AS preferred_gateway_uuid,
-           
-            m.ivr_menu_uuid,MIN(d.domain_name::text) AS domain_name,
+            m.ivr_menu_uuid,
+            MIN(d.domain_name::text) AS domain_name,
             MIN(m.variables::text) AS parent_variable,
             m.playback_type,
             m.playback_text
-        FROM v_ivr_menu_options op
-        JOIN v_ivr_menus m ON m.ivr_menu_uuid = op.ivr_menu_uuid
-        JOIN v_domains d ON  d.domain_uuid =  m.domain_uuid
-        LEFT join v_recordings r on r.recording_uuid::text = m.ivr_menu_greet_long
-        LEFT join v_recordings r1 on r1.recording_uuid::text = m.ivr_menu_greet_short
+        FROM v_ivr_menus m
+        LEFT JOIN v_ivr_menu_options op ON m.ivr_menu_uuid = op.ivr_menu_uuid
+        JOIN v_domains d ON d.domain_uuid = m.domain_uuid
+        LEFT JOIN v_recordings r ON r.recording_uuid::text = m.ivr_menu_greet_long
         WHERE m.ivr_menu_extension = :destination AND m.domain_uuid = :domain_uuid
         GROUP BY
             m.ivr_menu_greet_long, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,
-            m.ivr_menu_confirm_macro, m.ivr_menu_name,m.ivr_menu_uuid,r.recording_filename
+            m.ivr_menu_confirm_macro, m.ivr_menu_name, m.ivr_menu_uuid, r.recording_filename
     ]]
+
     local ivr_data = {}
-    dbh:query(query, {
-        destination = destination,
-        domain_uuid = domain_uuid
-    }, function(row)
+    dbh:query(query, { destination = destination, domain_uuid = domain_uuid }, function(row)
         ivr_data = row
     end)
- 
-    if not ivr_data.option_key or not ivr_data.actions then
-        freeswitch.consoleLog("ERR", "[IVR] No options/actions found for IVR " .. tostring(modified_ivr_id) .. "\n")
+
+    if not ivr_data.ivr_menu_uuid then
+        freeswitch.consoleLog("ERR", "[IVR] No IVR menu found for " .. tostring(destination) .. "\n")
         return
     end
- 
- 
+
     local ivr_menu_uuid = ivr_data.ivr_menu_uuid
     local domain_name = ivr_data.domain_name
-    local greet_long_path = ivr_data.recording_filename
- 
-    freeswitch.consoleLog("INFO", "greet_long_path " .. tostring(greet_long_path) .. "\n")
- 
-  
- 
-    greet_long = greet_long_path
     local base_path = "/var/lib/freeswitch/recordings/" .. domain_name .. "/"
-    local greet_long_path =
-        (greet_long and greet_long ~= "") and (base_path .. greet_long) or ""
- 
-    freeswitch.consoleLog("INFO", "greet_long_path " .. tostring(greet_long_path) .. "\n")
- 
-    local invalid_sound_path = (ivr_data.invalid_sound and ivr_data.invalid_sound ~= "") and
-                                   (base_path .. ivr_data.invalid_sound) or ""
-    local exit_sound_path =
-        (ivr_data.exit_sound and ivr_data.exit_sound ~= "") and (base_path .. ivr_data.exit_sound) or ""
- 
+
+    local greet_long_path = ivr_data.recording_filename and (base_path .. ivr_data.recording_filename) or ""
+    local invalid_sound_path = ivr_data.invalid_sound and (base_path .. ivr_data.invalid_sound) or ""
+    local exit_sound_path = ivr_data.exit_sound and (base_path .. ivr_data.exit_sound) or ""
+
+    -- 🎤 Dynamic TTS playback
+    if ivr_data.playback_type == "text" and ivr_data.playback_text and ivr_data.playback_text ~= "" then
+        local tts_text = ivr_data.playback_text:gsub("%${(.-)}", function(var)
+            return lua_ivr_vars[var] or session:getVariable(var) or ""
+        end)
+
+        freeswitch.consoleLog("INFO", "[IVR] Generating TTS for text: " .. tts_text .. "\n")
+
+        local tts_file = generate_tts_file(
+            tts_text, "http://localhost:5500", "coqui-tts:en_ljspeech", "en", "high", "0.005", "true", "true"
+        )
+
+        if tts_file and tts_file ~= "" then
+            greet_long_path = tts_file
+            freeswitch.consoleLog("INFO", "[IVR] Using generated TTS file: " .. greet_long_path .. "\n")
+        else
+            freeswitch.consoleLog("ERR", "[IVR] Failed to generate TTS file\n")
+        end
+    end
+
     local min_digit = tonumber(ivr_data.min_digit) or 1
     local max_digit = tonumber(ivr_data.max_digit) or 1
     local timeout = tonumber(ivr_data.timeout) or 3000
     local inter_digit_timeout = tonumber(ivr_data.inter_digit_timeout) or 2000
     local max_failures = tonumber(ivr_data.max_failures) or 3
     local parent_variable = ivr_data.parent_variable
-   
-    local keys = split(ivr_data.option_key, ",")
-    local actions = split(ivr_data.actions, ",")
     local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
 
+    local keys = split(ivr_data.option_key or "", ",")
+    local actions = split(ivr_data.actions or "", ",")
 
-
-    
-
-    freeswitch.consoleLog("INFO", "[IVR] playback_type = " .. tostring(ivr_data.playback_type) .. "\n")
-
-   -- 🎤 === NEW SECTION: Dynamic TTS Playback Support ===
-    if ivr_data.playback_type == "text" and ivr_data.playback_text and ivr_data.playback_text ~= "" then
-        local tts_text = ivr_data.playback_text
-
-        -- Replace variables (e.g., ${src_phone}) in playback_text dynamically
-        tts_text = tts_text:gsub("%${(.-)}", function(var)
-            return lua_ivr_vars[var] or session:getVariable(var) or ""
-        end)
-
-        freeswitch.consoleLog("INFO", "[IVR] Generating TTS for text: " .. tts_text .. "\n")
-
-        
-         local tts_file = generate_tts_file(
-            tts_text,                 -- text to speak
-            "http://localhost:5500",  -- server URL
-            "coqui-tts:en_ljspeech",  -- voice
-            "en",                     -- language
-            "high",                   -- vocoder
-            "0.005",                  -- denoiser strength
-            "true",                   -- ssml
-            "true"                   -- cache
-        ) 
-
-       -- local tts_file = generate_tts_file(tts_text)
-
-        if tts_file and tts_file ~= "" then
-            greet_long_path = tts_file
-            freeswitch.consoleLog("INFO", "[IVR] Using generated TTS file: " .. greet_long_path .. "\n")
-        else
-            freeswitch.consoleLog("ERR", "[IVR] Failed to generate TTS file for text\n")
+    -- 🛡️ Safe regex builder
+    local digit_regex = ""
+    if keys and #keys > 0 then
+        local safe_keys = {}
+        for _, k in ipairs(keys) do
+            if k and k ~= "" then
+                local clean = k:gsub("[^%w%*#]", "")
+                if clean ~= "" then
+                    table.insert(safe_keys, clean)
+                end
+            end
         end
+        if #safe_keys > 0 then
+            digit_regex = "[" .. table.concat(safe_keys, "") .. "]"
+        else
+            digit_regex = "\\d"
+        end
+    else
+        freeswitch.consoleLog("WARNING", "[IVR] No keys found, using fallback regex \\d\n")
+        digit_regex = "\\d"
     end
-    -- 🎤 === END NEW SECTION ===
-    
- 
+
+    freeswitch.consoleLog("INFO", "[IVR] Using digit regex: " .. tostring(digit_regex) .. "\n")
+
     local key_action_list = {}
     for i = 1, #keys do
         addLast(key_action_list, keys[i], actions[i])
     end
- 
-    session:execute("set", "application_state=ivr")
-    if ivr_data.name and ivr_data.name ~= "" then
-        session:execute("set", ivr_data.name)
-    end
- 
+
     session:answer()
- 
-    local digit_regex = "[" .. table.concat(keys, "") .. "]"
-    local input = session:playAndGetDigits(min_digit, max_digit, max_failures, timeout, "#", greet_long_path,
-        invalid_sound_path, digit_regex, "input_digits", inter_digit_timeout, nil)
- 
+    session:execute("set", "application_state=ivr")
 
+    local input = session:playAndGetDigits(min_digit, max_digit, max_failures, timeout, "#",
+        greet_long_path, invalid_sound_path, digit_regex, "input_digits", inter_digit_timeout, nil)
 
- 
     local matched_action = search(key_action_list, input)
     local action_type, target = nil, nil
- 
+
     if matched_action then
         action_type, target = matched_action:match("^([^_]+)_(.+)$")
-        if not action_type then
-            action_type = matched_action
-            target = ""
-        end
+        action_type = action_type or matched_action
+        target = target or ""
     end
-     
-    freeswitch.consoleLog("console", "[IVR] Selected input: " .. input .. " action_type: "..tostring(action_type).." \n")
- 
-    -- Update variable with current input
+
+    freeswitch.consoleLog("INFO", string.format("[IVR] Selected input: %s -> action: %s\n", tostring(input), tostring(action_type)))
+
+    -- Track input
     if parent_variable and input then
         lua_ivr_vars[parent_variable] = input
     end
-    -- Append to IVR journey path
+
     if #args.ivr_path < MAX_PATH_STEPS then
         table.insert(args.ivr_path, {
             ivr_id = ivr_menu_uuid,
             ivr_menu_extension = modified_ivr_id,
- 
             input = input,
             action = action_type or "unknown",
             target = target or "",
             timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
         })
     end
- 
-    -- Upsert journey
-    local journey_query = [[
-    INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, variables, updated_at)
-    VALUES (:call_uuid, :domain_uuid, :full_path::jsonb, :variables::jsonb, NOW())
-    ON CONFLICT (call_uuid)
-    DO UPDATE SET
-        full_path = EXCLUDED.full_path,
-        variables = EXCLUDED.variables,
-        updated_at = NOW()
-]]
- 
-    dbh:query(journey_query, {
+
+    -- Save IVR journey
+    dbh:query([[
+        INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, variables, updated_at)
+        VALUES (:call_uuid, :domain_uuid, :full_path::jsonb, :variables::jsonb, NOW())
+        ON CONFLICT (call_uuid) DO UPDATE
+        SET full_path = EXCLUDED.full_path, variables = EXCLUDED.variables, updated_at = NOW()
+    ]], {
         call_uuid = session:get_uuid(),
         domain_uuid = domain_uuid,
         full_path = json.encode(args.ivr_path),
         variables = json.encode(lua_ivr_vars or {})
     })
- 
-    -- Route to action
-    if matched_action then
-        if action_type == "ivr" then
-            incrementCounter(counter)
-            if getCurrentCount(counter) < max_failures then
-                session:setVariable("parent_ivr_id", modified_ivr_id)
-                session:setVariable("ivr_id", target)
-                args.modified_ivr_id = target
-                args.destination = target
-                args.visited_ivr = visited
-                return handlers.ivr(args, counter)
-            else
-                freeswitch.consoleLog("warning", "Max IVR traversals reached\n")
-                session:execute("playback", "ivr/ivr-call_failed.wav")
-                return true
- 
-            end
- 
-        elseif action_type == "backtoivr" then
-            local parent = session:getVariable("parent_ivr_id")
-            if parent and not visited[parent] then
-                visited[parent] = true
-                session:setVariable("ivr_id", parent)
-                args.modified_ivr_id = parent
-                args.destination = parent
-                args.visited_ivr = visited
-                return handlers.ivr(args, counter)
-            else
-                session:execute("playback", exit_sound_path)
-                return true
-            end
- 
-          
-        elseif action_type == "timegroup" then
-            session:setVariable("parent_ivr_id", destination)
-            timegroup(target, ivr_menu_uuid, input)
-               
-        elseif action_type == "hangup" then
-            return session:execute("hangup")
- 
-        elseif action_type == "lua" then
-            -- usr/share/freeswitch/scripts  please paste lua file here to make it executable
-            incrementCounter(counter)
-            if getCurrentCount(counter) >= max_failures then
-                session:execute("playback", exit_sound_path)
-                return true
-            end
-            session:execute("lua", target)
-           
-            args.modified_ivr_id = modified_ivr_id
-            args.destination = destination
-            args.visited_ivr = visited
+
+    -- Route based on action
+    if not matched_action then
+        freeswitch.consoleLog("WARNING", "[IVR] No action matched, playing exit sound\n")
+        session:execute("playback", exit_sound_path)
+        return true
+    end
+
+    if action_type == "ivr" then
+        incrementCounter(counter)
+        if getCurrentCount(counter) < max_failures then
+            session:setVariable("parent_ivr_id", modified_ivr_id)
+            args.destination = target
             return handlers.ivr(args, counter)
- 
-        elseif action_type == "outbound" then
-            session:setVariable("preferred_gateway_uuid", preferred_gateway_uuid)
-            session:setVariable("destination_number", target)
-            handlers.outbound(args)
- 
-        elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type ==
-            "conf" then
-            session:setVariable("destination_number", target)
-            return session:execute("transfer", target .. " XML systech")
- 
-        elseif action_type == "voicemail" then
-            freeswitch.consoleLog("info", " " .. tostring(action_type) .. "\n");
-            session:setVariable("destination_number", target)
-            voicemail_handler(target, domain_name, domain_uuid)
- 
-        elseif action_type == "api" then
-            --dynamic_variables = json.encode(lua_ivr_vars or {})
-            -- freeswitch.consoleLog("info", " lua_ivr_vars" .. (dynamic_variables ) .. "\n");
- 
-            --api_handler(target, dynamic_variables)
-        local encoded_payload = json.encode(lua_ivr_vars or {})
- 
-        session:setVariable("encoded_payload", encoded_payload)
-        session:setVariable("api_id", target)
-        session:setVariable("should_hangup", "false")
-        session:setVariable("ivr_menu_uuid", ivr_menu_uuid)
-        session:setVariable("parent_ivr_id",destination )
-        session:execute("lua", "api_handler.lua")
-        local api_match_action=session:getVariable("api_match_action")
-        if api_match_action and api_match_action =="no_match" then 
-        freeswitch.consoleLog("console", "[ivr_handler] out of api function..    ."..tostring(api_match_action))
-        local ivr_data = get_ivr_type_and_destination(ivr_menu_uuid, input)
-        if not ivr_data then
-            return false
+        else
+            freeswitch.consoleLog("WARNING", "Max IVR traversals reached\n")
+            session:execute("playback", "ivr/ivr-call_failed.wav")
+            return true
         end
 
-        local target = ivr_data.failover_destination_num
-        local action_type = ivr_data.failover_destination_type
-        route_action(action_type, target, domain, domain_uuid)
-        
-       -- session:execute("transfer", destination_number .. " XML systech") 
-
-        end
-
+    elseif action_type == "backtoivr" then
+        local parent = session:getVariable("parent_ivr_id")
+        if parent and not visited[parent] then
+            visited[parent] = true
+            args.destination = parent
+            return handlers.ivr(args, counter)
         else
             session:execute("playback", exit_sound_path)
         end
+
+    elseif action_type == "timegroup" then
+        session:setVariable("parent_ivr_id", destination)
+        timegroup(target, ivr_menu_uuid, input)
+
+    elseif action_type == "node" then
+        find_matching_condition(tonumber(target), domain, domain_uuid, ivr_menu_uuid)
+
+    elseif action_type == "outbound" then
+        session:setVariable("preferred_gateway_uuid", preferred_gateway_uuid)
+        session:setVariable("destination_number", target)
+        handlers.outbound(args)
+
+    elseif action_type == "lua" then
+        session:execute("lua", target)
+        return handlers.ivr(args, counter)
+
+    elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type == "conf" then
+        session:execute("transfer", target .. " XML systech")
+
+    elseif action_type == "voicemail" then
+        voicemail_handler(target, domain_name, domain_uuid)
+
+    elseif action_type == "api" then
+        session:setVariable("encoded_payload", json.encode(lua_ivr_vars or {}))
+        session:setVariable("api_id", target)
+        session:setVariable("ivr_menu_uuid", ivr_menu_uuid)
+        session:execute("lua", "api_handler.lua")
+
     else
         session:execute("playback", exit_sound_path)
     end
- 
+
     return true
 end
+
 
 
 
