@@ -64,6 +64,81 @@ end
 
 
 
+
+
+
+
+-- ============================================================
+-- 🎤 Generate TTS audio file dynamically with optional params
+-- ============================================================
+
+function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocoder, tts_denoiser, tts_ssml, tts_cache)
+    -- ✅ Defaults
+    tts_text     = tts_text     or "Hello, this is a test message."
+    tts_server   = tts_server   or "http://localhost:5500"
+    tts_voice    = tts_voice    or "espeak:en-029"
+    tts_lang     = tts_lang     or "en"
+    tts_vocoder  = tts_vocoder  or "high"
+    tts_denoiser = tts_denoiser or "0.005"
+    tts_ssml     = tts_ssml     or "true"
+    tts_cache    = tts_cache    or "false"
+
+    local output_file = string.format("/tmp/tts_%d.wav", os.time())
+
+    -- ✅ URL encode helper
+    local function urlencode(str)
+        if str then
+            str = string.gsub(str, "\n", "%%0A")
+            str = string.gsub(str, "([^%w%-_%.%~])", function(c)
+                return string.format("%%%02X", string.byte(c))
+            end)
+        end
+        return str
+    end
+
+    -- ✅ Build dynamic TTS URL
+    local tts_url = string.format(
+        "%s/api/tts?voice=%s&lang=%s&vocoder=%s&denoiserStrength=%s&ssml=%s&text=%s&cache=%s",
+        tts_server,
+        urlencode(tts_voice),
+        urlencode(tts_lang),
+        urlencode(tts_vocoder),
+        urlencode(tts_denoiser),
+        urlencode(tts_ssml),
+        urlencode(tts_text),
+        urlencode(tts_cache)
+    )
+
+    freeswitch.consoleLog("INFO", "[TTS] Fetching: " .. tts_url .. "\n")
+
+    -- ✅ Fetch TTS file
+    os.execute(string.format('curl -s -o "%s" "%s"', output_file, tts_url))
+
+    -- ✅ Wait for file to appear
+    local function wait_for_file(file_path, timeout)
+        local start = os.time()
+        while os.time() - start < timeout do
+            local f = io.open(file_path, "rb")
+            if f then f:close(); return true end
+            freeswitch.msleep(100)
+        end
+        return false
+    end
+
+    if not wait_for_file(output_file, 5) then
+        freeswitch.consoleLog("ERR", "[TTS] File not found: " .. output_file .. "\n")
+        return nil
+    end
+
+    freeswitch.consoleLog("INFO", "[TTS] File ready: " .. output_file .. "\n")
+    return output_file
+end
+
+
+
+
+
+
 -- Reusable function to handle IVR routing actions
 function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uuid)
     if not check_session() then
@@ -460,7 +535,9 @@ function handlers.ivr(args, counter)
             MIN(op.preferred_gateway_uuid::text) AS preferred_gateway_uuid,
            
             m.ivr_menu_uuid,MIN(d.domain_name::text) AS domain_name,
-            MIN(m.variables::text) AS parent_variable
+            MIN(m.variables::text) AS parent_variable,
+            m.playback_type,
+            m.playback_text
         FROM v_ivr_menu_options op
         JOIN v_ivr_menus m ON m.ivr_menu_uuid = op.ivr_menu_uuid
         JOIN v_domains d ON  d.domain_uuid =  m.domain_uuid
@@ -515,6 +592,47 @@ function handlers.ivr(args, counter)
     local keys = split(ivr_data.option_key, ",")
     local actions = split(ivr_data.actions, ",")
     local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
+
+
+
+    
+
+    freeswitch.consoleLog("INFO", "[IVR] playback_type = " .. tostring(ivr_data.playback_type) .. "\n")
+
+   -- 🎤 === NEW SECTION: Dynamic TTS Playback Support ===
+    if ivr_data.playback_type == "text" and ivr_data.playback_text and ivr_data.playback_text ~= "" then
+        local tts_text = ivr_data.playback_text
+
+        -- Replace variables (e.g., ${src_phone}) in playback_text dynamically
+        tts_text = tts_text:gsub("%${(.-)}", function(var)
+            return lua_ivr_vars[var] or session:getVariable(var) or ""
+        end)
+
+        freeswitch.consoleLog("INFO", "[IVR] Generating TTS for text: " .. tts_text .. "\n")
+
+        
+         local tts_file = generate_tts_file(
+            tts_text,                 -- text to speak
+            "http://localhost:5500",  -- server URL
+            "coqui-tts:en_ljspeech",  -- voice
+            "en",                     -- language
+            "high",                   -- vocoder
+            "0.005",                  -- denoiser strength
+            "true",                   -- ssml
+            "true"                   -- cache
+        ) 
+
+       -- local tts_file = generate_tts_file(tts_text)
+
+        if tts_file and tts_file ~= "" then
+            greet_long_path = tts_file
+            freeswitch.consoleLog("INFO", "[IVR] Using generated TTS file: " .. greet_long_path .. "\n")
+        else
+            freeswitch.consoleLog("ERR", "[IVR] Failed to generate TTS file for text\n")
+        end
+    end
+    -- 🎤 === END NEW SECTION ===
+    
  
     local key_action_list = {}
     for i = 1, #keys do
@@ -532,6 +650,8 @@ function handlers.ivr(args, counter)
     local input = session:playAndGetDigits(min_digit, max_digit, max_failures, timeout, "#", greet_long_path,
         invalid_sound_path, digit_regex, "input_digits", inter_digit_timeout, nil)
  
+
+
  
     local matched_action = search(key_action_list, input)
     local action_type, target = nil, nil
