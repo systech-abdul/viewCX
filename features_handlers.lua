@@ -597,7 +597,7 @@ function handlers.ivr(args, counter)
 
     freeswitch.consoleLog("INFO", string.format("[IVR] Routing to %s domain_uuid %s\n", tostring(destination), tostring(domain_uuid)))
 
-    -- === SQL Query (with greet_short, invalid, exit) ===
+        -- === SQL Query (with greet_short, invalid, exit) ===
     local query = [[
         SELECT
             COALESCE(string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits), '') AS option_key,
@@ -608,18 +608,20 @@ function handlers.ivr(args, counter)
             m.ivr_menu_greet_short AS greet_short,
             m.ivr_menu_invalid_sound AS invalid_sound,
             m.ivr_menu_exit_sound AS exit_sound,
-
+            m.ivr_menu_no_input_sound AS no_input_sound,  
             -- Recording filenames
-            r_long.recording_filename AS greet_long_filename,
-            r_short.recording_filename AS greet_short_filename,
+            r_long.recording_filename   AS greet_long_filename,
+            r_short.recording_filename  AS greet_short_filename,
             r_invalid.recording_filename AS invalid_sound_filename,
-            r_exit.recording_filename AS exit_sound_filename,
+            r_exit.recording_filename   AS exit_sound_filename,
+            r_no_input.recording_filename AS no_input_sound_filename, 
 
             1 AS min_digit,
             MAX(m.ivr_menu_digit_len) AS max_digit,
             MAX(m.ivr_menu_inter_digit_timeout) AS inter_digit_timeout,
             MAX(m.ivr_menu_timeout) AS timeout,
             MIN(CASE WHEN m.ivr_menu_max_failures > 5 THEN 5 ELSE m.ivr_menu_max_failures END) AS max_failures,
+
             m.ivr_menu_confirm_macro,
             m.ivr_menu_name AS name,
             MIN(op.preferred_gateway_uuid::text) AS preferred_gateway_uuid,
@@ -630,20 +632,39 @@ function handlers.ivr(args, counter)
             m.playback_text,
             m.ivr_menu_exit_app,
             m.ivr_menu_exit_data
+
         FROM v_ivr_menus m
         LEFT JOIN v_ivr_menu_options op ON m.ivr_menu_uuid = op.ivr_menu_uuid
         JOIN v_domains d ON d.domain_uuid = m.domain_uuid
-        LEFT JOIN v_recordings r_long   ON r_long.recording_uuid::text   = m.ivr_menu_greet_long
-        LEFT JOIN v_recordings r_short  ON r_short.recording_uuid::text  = m.ivr_menu_greet_short
-        LEFT JOIN v_recordings r_invalid ON r_invalid.recording_uuid::text = m.ivr_menu_invalid_sound
-        LEFT JOIN v_recordings r_exit   ON r_exit.recording_uuid::text   = m.ivr_menu_exit_sound
-        WHERE m.ivr_menu_extension = :destination AND m.domain_uuid = :domain_uuid
+
+        -- Recording joins
+        LEFT JOIN v_recordings r_long     ON r_long.recording_uuid::text    = m.ivr_menu_greet_long
+        LEFT JOIN v_recordings r_short    ON r_short.recording_uuid::text   = m.ivr_menu_greet_short
+        LEFT JOIN v_recordings r_invalid  ON r_invalid.recording_uuid::text = m.ivr_menu_invalid_sound
+        LEFT JOIN v_recordings r_exit     ON r_exit.recording_uuid::text    = m.ivr_menu_exit_sound
+        LEFT JOIN v_recordings r_no_input ON r_no_input.recording_uuid::text = m.ivr_menu_no_input_sound
+
+        WHERE m.ivr_menu_extension = :destination
+          AND m.domain_uuid = :domain_uuid
+
         GROUP BY
-            m.ivr_menu_greet_long, m.ivr_menu_greet_short, m.ivr_menu_invalid_sound, m.ivr_menu_exit_sound,
-            m.ivr_menu_confirm_macro, m.ivr_menu_name, m.ivr_menu_uuid,
-            r_long.recording_filename, r_short.recording_filename, r_invalid.recording_filename, r_exit.recording_filename
+            m.ivr_menu_greet_long,
+            m.ivr_menu_greet_short,
+            m.ivr_menu_invalid_sound,
+            m.ivr_menu_exit_sound,
+            m.ivr_menu_no_input_sound,  
+            m.ivr_menu_confirm_macro,
+            m.ivr_menu_name,
+            m.ivr_menu_uuid,
+            r_long.recording_filename,
+            r_short.recording_filename,
+            r_invalid.recording_filename,
+            r_exit.recording_filename,
+            r_no_input.recording_filename  
     ]]
 
+
+    
     local ivr_data = {}
     dbh:query(query, { destination = destination, domain_uuid = domain_uuid }, function(row)
         ivr_data = row
@@ -663,6 +684,7 @@ function handlers.ivr(args, counter)
     local greet_short_path = ivr_data.greet_short_filename and (base_path .. ivr_data.greet_short_filename) or ""
     local invalid_sound_path = ivr_data.invalid_sound_filename and (base_path .. ivr_data.invalid_sound_filename) or ""
     local exit_sound_path = ivr_data.exit_sound_filename and (base_path .. ivr_data.exit_sound_filename) or ""
+    local no_input_sound_path = ivr_data.no_input_sound_filename and (base_path .. ivr_data.no_input_sound_filename) or ""
 
     --  Generate dynamic TTS (if playback_type=text)
     if ivr_data.playback_type == "text" and ivr_data.playback_text and ivr_data.playback_text ~= "" then
@@ -689,7 +711,7 @@ function handlers.ivr(args, counter)
           if greet_long_path ~= "" then
             freeswitch.consoleLog("console", "[IVR] welcome greet: " .. greet_long_path .. "\n")
 
-                    session:execute("playback", greet_long_path)
+                    --session:execute("playback", greet_long_path)
                 end
     
      
@@ -708,8 +730,8 @@ function handlers.ivr(args, counter)
     local actions = split(ivr_data.actions or "", ",")
 
     --  Build digit regex safely
-    local digit_regex = ""
-    if keys and #keys > 0 then
+    local digit_regex = "[0-9]"
+   --[[  if keys and #keys > 0 then
         local safe_keys = {}
         for _, k in ipairs(keys) do
             if k and k ~= "" then
@@ -723,7 +745,7 @@ function handlers.ivr(args, counter)
         digit_regex = "\\d"
     end
 
-    freeswitch.consoleLog("INFO", "[IVR] Using digit regex: " .. tostring(digit_regex) .. "\n")
+    freeswitch.consoleLog("INFO", "[IVR] Using digit regex: " .. tostring(digit_regex) .. "\n") ]]
 
     local key_action_list = {}
     for i = 1, #keys do
@@ -756,24 +778,56 @@ function handlers.ivr(args, counter)
             freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_long for nested IVR\n")
         end
     end
+   
+
+    
+    ------------------------------------------------------
+    -- Collect input
+    ------------------------------------------------------
+    local input, matched_action, action_type, target = nil, nil, nil, nil
 
     --  Play greeting and collect digits
-    local input = session:playAndGetDigits(
-        min_digit, max_digit, max_failures, timeout, "#",
-        play_greeting, invalid_sound_path, digit_regex, "input_digits", inter_digit_timeout, nil
-    )
+    
+    while max_failures > 0 do
+        input = session:playAndGetDigits(
+            min_digit, max_digit, 1, timeout, "#",
+            play_greeting, nil, "[0-9*#]", "input_digits", inter_digit_timeout, nil
+        )
 
-    -- Determine action
-    local matched_action = search(key_action_list, input)
-    local action_type, target = nil, nil
+        freeswitch.consoleLog("INFO", "[IVR] playAndGetDigits input: " .. tostring(input) .. "\n")
 
-    if matched_action then
-        action_type, target = matched_action:match("^([^_]+)_(.+)$")
-        action_type = action_type or matched_action
-        target = target or ""
+        if not input or input == "" then
+            freeswitch.consoleLog("INFO", "[IVR] No input, playing no_input sound\n")
+            if no_input_sound_path ~= "" then session:execute("playback", no_input_sound_path) end
+            max_failures = max_failures - 1
+            goto continue
+        end
+
+        matched_action = search(key_action_list, input)
+        if matched_action then
+            action_type, target = matched_action:match("^([^_]+)_(.+)$")
+            action_type = action_type or matched_action
+            target = target or ""
+        else
+            action_type, target = nil, nil
+        end
+
+        freeswitch.consoleLog("INFO", string.format("[IVR] Selected input: %s -> action: %s target: %s\n",
+            tostring(input), tostring(action_type), tostring(target)))
+
+        if not action_type then
+            freeswitch.consoleLog("INFO", "[IVR] Invalid input, playing invalid sound\n")
+            if invalid_sound_path ~= "" then session:execute("playback", invalid_sound_path) end
+            max_failures = max_failures - 1
+            goto continue
+        end
+
+        -- Valid action
+        break
+
+        ::continue::
     end
 
-    freeswitch.consoleLog("INFO", string.format("[IVR] Selected input: %s -> action: %s\n", tostring(input), tostring(action_type)))
 
     if parent_variable and input then
         lua_ivr_vars[parent_variable] = input
