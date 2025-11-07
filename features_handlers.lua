@@ -422,7 +422,7 @@ function handlers.callcenter(args)
         session:execute("playback", queue_greeting_sound)
         session:sleep(1000)
     end
-    
+
     -- Parse JSON options from queue_flow_json
     local options = {}
     if queue_data.queue_flow_json and queue_data.queue_flow_json ~= '' then
@@ -896,7 +896,7 @@ function handlers.ivr(args, counter)
 
     if action_type == "ivr" then
         incrementCounter(counter)
-        if getCurrentCount(counter) < max_failures then
+        if getCurrentCount(counter) <= max_failures then
             session:setVariable("parent_ivr_id", modified_ivr_id)
             args.destination = target
             return handlers.ivr(args, counter)
