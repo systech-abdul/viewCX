@@ -413,7 +413,16 @@ function handlers.callcenter(args)
     session:setVariable("queue_name", queue_data.queue_name or "default")
     session:setVariable("queue", queue)
     
-
+    -- Run background announcement/prompt Lua
+    local queue_greeting = queue_data.queue_greeting 
+  
+    if queue_greeting ~= nil and queue_greeting ~= '' then
+        local queue_greeting_sound = queue_greeting 
+        freeswitch.consoleLog("console", "[CallCenter] queue_greeting_sound: " .. tostring(queue_greeting_sound) .. "\n")
+        session:execute("playback", queue_greeting_sound)
+        session:sleep(1000)
+    end
+    
     -- Parse JSON options from queue_flow_json
     local options = {}
     if queue_data.queue_flow_json and queue_data.queue_flow_json ~= '' then
