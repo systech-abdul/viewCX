@@ -39,6 +39,25 @@ local function search(list, key)
     return nil
 end
 
+
+
+-- Helper function to check if a file exists and is a regular file
+-- Check if a path exists and is a regular file
+function file_exists(filename)
+    local f = io.open(filename, "r")
+    if f then
+        local ok, err, code = f:read(0) -- try reading zero bytes
+        f:close()
+        if ok or code ~= 21 then -- code 21 = EISDIR (is a directory)
+            return true
+        else
+            return false
+        end
+    else
+        return false
+    end
+end
+
 -- String split utility
 local function split(inputstr, sep)
     local t = {}
@@ -779,26 +798,18 @@ function handlers.ivr(args, counter)
     local parent_ivr_id = session:getVariable("parent_ivr_id")
     local play_greeting = ""
 
-    if not parent_ivr_id or parent_ivr_id == "" then
-        -- Root IVR: play greet_long first
-        if greet_short_path ~= "" then
-            play_greeting = greet_short_path
-            freeswitch.consoleLog("INFO", "[IVR] Using greet_long for root IVR\n")
-        elseif greet_long_path ~= "" then
-            play_greeting = greet_long_path
-            freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_short for root IVR\n")
-        end
+      -- Determine which greeting to play
+     if greet_short_path ~= "" and file_exists(greet_short_path) then
+        play_greeting = greet_short_path
+        freeswitch.consoleLog("INFO", "[IVR] Using greet_short: " .. play_greeting .. "\n")
+    -- Fallback to greet_long
+    elseif greet_long_path ~= "" and file_exists(greet_long_path) then
+        play_greeting = greet_long_path
+        freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_long: " .. play_greeting .. "\n")
     else
-        -- Nested IVR: play greet_short first
-        if greet_long_path ~= "" then
-            play_greeting = greet_long_path
-            freeswitch.consoleLog("INFO", "[IVR] Using greet_short for nested IVR\n")
-        elseif greet_short_path ~= "" then
-            play_greeting = greet_short_path
-            freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_long for nested IVR\n")
-        end
+        freeswitch.consoleLog("WARNING", "[IVR] No valid greeting file found\n")
     end
-   
+    
 
     
     ------------------------------------------------------
