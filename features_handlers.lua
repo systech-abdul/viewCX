@@ -1023,25 +1023,39 @@ function handlers.handle_did_call(args)
 
     --session:execute("info");
     local log_message = "[handlers.handle_did_call] Routing args:\n"
-    for k, v in pairs(args) do
+   --[[  for k, v in pairs(args) do
         log_message = log_message .. string.format("  %s = %s\n", tostring(k), tostring(v))
     end
-    freeswitch.consoleLog("info", log_message)
+    freeswitch.consoleLog("info", log_message) ]]
 
     session:setVariable("verified_did", "true")
-    local v_did_id = args.destination;
-    freeswitch.consoleLog("info", "[DID ] args.domain_name " .. args.domain_name .." v_did_id "..v_did_id.."\n")
-
     
-    session:setVariable("domain_name", args.domain_name)
-     args.domain = args.domain_name;
+
+    local did_type        = session:getVariable("did_type") or ""
+    local did_destination = session:getVariable("did_destination") or ""
+    local domain_name     = session:getVariable("domain_name") or ""
+    local domain_uuid     = session:getVariable("domain_uuid") or ""
+    args.domain = domain_name;
+   
+
+    freeswitch.consoleLog(
+        "info",
+        string.format(
+            "[DID] domain_name=%s, did_type=%s, did_destination=%s\n",
+            domain_name, did_type, did_destination
+        )
+     )
   
       
-     if v_did_id then
+     if did_type and did_type=='ivr' then
         
-        did_ivrs(v_did_id);
-     end
-    
+        did_ivrs(did_destination);
+     
+    else  
+           -- Route the action using reusable function
+    route_action(did_type, did_destination, domain_name, domain_uuid, nil)
+
+    end
     return true
 end
 

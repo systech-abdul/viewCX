@@ -121,42 +121,70 @@ local args = {
 
 -- DID validation
 local function is_valid_did(dest)
-
     local caller_ip = session:getVariable("network_addr")
     freeswitch.consoleLog("info", "[Lua] Caller IP: " .. tostring(caller_ip) .. "\n")
+
+    ------------------------------------------------------------------
+    -- SQL: include failover_type, failover_destination, and day validity
+    ------------------------------------------------------------------
     local sql = [[
-    SELECT r.*, d.domain_name,
-    CASE
-    WHEN r.src_regex_pattern = '*' THEN 'matched_star'
-    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
-    && ARRAY[REPLACE(:src, '+', '')]
-    AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 'match_both_src_and_caler_ip'
-    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
-    && ARRAY[REPLACE(:src, '+', '')] THEN 'matched_src'
-    ELSE 'no_match'
-    END AS match_type
-    FROM v_did_routes r
-    JOIN v_domains d ON d.domain_uuid = r.domain_uuid
-    WHERE r.did_num = :dest
-      AND (
-        r.src_regex_pattern = '*'
-        OR string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
-       && ARRAY[REPLACE(:src, '+', '')]
-    )
-    AND r.enabled = true
-    AND (r.ip_check IS NULL OR r.ip_check = :caller_ip)
-    ORDER BY 
-    CASE 
-    WHEN r.src_regex_pattern = '*' THEN 2
-    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
-         && ARRAY[REPLACE(:src, '+', '')]
-         AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 0
-    WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',') 
-         && ARRAY[REPLACE(:src, '+', '')] THEN 1
-    ELSE 3
-    END
-    LIMIT 1
+        SELECT 
+            r.*, 
+            r.time_zone, 
+            r.failover_type,
+            r.failover_destination,
+            d.domain_name,
+            CASE
+                WHEN r.src_regex_pattern = '*' THEN 'matched_star'
+                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
+                     && ARRAY[REPLACE(:src, '+', '')]
+                     AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 'match_both_src_and_caler_ip'
+                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
+                     && ARRAY[REPLACE(:src, '+', '')] THEN 'matched_src'
+                ELSE 'no_match'
+            END AS match_type,
+            --  Check if current day matches in timezone
+            CASE
+                WHEN (
+                    r.days IS NULL OR r.days = '' OR
+                    POSITION(
+                        TRIM(TO_CHAR(
+                            (CURRENT_TIMESTAMP AT TIME ZONE COALESCE(r.time_zone, 'UTC')), 
+                            'Day'
+                        )) IN r.days
+                    ) > 0
+                ) THEN true
+                ELSE false
+            END AS active_today
+        FROM v_did_routes r
+        JOIN v_domains d ON d.domain_uuid = r.domain_uuid
+        WHERE 
+            r.did_num = :dest
+            AND (
+                r.src_regex_pattern = '*'
+                OR string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
+                   && ARRAY[REPLACE(:src, '+', '')]
+            )
+            AND r.enabled = true
+            AND (r.ip_check IS NULL OR r.ip_check = :caller_ip)
+        ORDER BY 
+            CASE 
+                WHEN r.src_regex_pattern = '*' THEN 2
+                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
+                     && ARRAY[REPLACE(:src, '+', '')]
+                     AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 0
+                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
+                     && ARRAY[REPLACE(:src, '+', '')] THEN 1
+                ELSE 3
+            END
+        LIMIT 1
     ]]
+
+    ------------------------------------------------------------------
+    -- Execute SQL
+    ------------------------------------------------------------------
+    local found = nil
+ 
 
     dbh:query(sql, {
         src = tostring(src),
@@ -168,65 +196,64 @@ local function is_valid_did(dest)
         end
         found = true
 
-        if row.match_type then
-            freeswitch.consoleLog("CONSOLE", "[Routing] Match type: " .. row.match_type .. "\n")
-        end
+        freeswitch.consoleLog("info", "[Routing] DID found for " .. dest .. "\n")
+        freeswitch.consoleLog("info", "[Routing] Time Zone: " .. tostring(row.time_zone) .. "\n")
+        freeswitch.consoleLog("console", "[Routing] Active Today: " .. tostring(row.active_today) .. "\n")
+        session:setVariable("domain_name",tostring(row.domain_name) )
+        session:setVariable("domain_uuid",tostring(row.domain_uuid) )
+        freeswitch.consoleLog("console", "[Routing] domain_name: " .. tostring(row.domain_name) .. "\n")
+--[[ 
+        if row.failover_destination and row.failover_destination ~= "" then
+            freeswitch.consoleLog("info", "[Routing] Failover Number: " .. row.failover_destination .. "\n")
+        end ]]
     end)
 
-    
+    ------------------------------------------------------------------
+    -- If no DID match at all
+    ------------------------------------------------------------------
+  if not found then
+    freeswitch.consoleLog(
+        "warning",
+        string.format(
+            "[Routing] No DID match found | Dest: %s | Src: %s | SrcIP: %s\n",
+            tostring(dest or "nil"),
+            tostring(src or "nil"),
+            tostring(caller_ip or "nil")
+        )
+    )
+    return false
+end
 
-    if (debug["sql"]) then
-        local json = require "resources.functions.lunajson"
-        freeswitch.consoleLog("notice",
-            "[is_valid_did] SQL: " .. sql .. "\nsrc: " .. tostring(src) .. "\ndest: " .. tostring(dest) ..
-                "\ncaller_ip: " .. tostring(caller_ip) .. "\n")
-    end
 
-    if found == nil then
+    ------------------------------------------------------------------
+    -- Handle failover condition (inactive today)
+    ------------------------------------------------------------------
+    if args.active_today == "f" or args.active_today == false then
+        if args.failover_destination and args.failover_destination ~= "" then
+            freeswitch.consoleLog("WARNING", "[Routing] DID inactive today (" ..
+                (args.time_zone or "local") .. "). Using failover: " ..
+                args.failover_destination .. " (" .. (args.failover_type or "unknown") .. ")\n")
 
-        local fallback_sql = [[
-        SELECT d.domain_uuid, d.domain_name
-        FROM v_did_routes r
-        JOIN v_domains d ON d.domain_uuid = r.domain_uuid
-        WHERE r.did_num = :dest
-          AND r.enabled = true
-        LIMIT 1
-    ]]
-
-    dbh:query(fallback_sql, { dest = tostring(dest) }, function(row)
-        if row.domain_uuid then
-            session:setVariable("domain_uuid", row.domain_uuid)
-            session:setVariable("domain_name", row.domain_name)
-            freeswitch.consoleLog("INFO", "[Routing] Fallback matched DID: " .. dest .. " => Domain: " .. row.domain_name .. " (UUID: " .. row.domain_uuid .. ")\n")
-        end
-    end)
-
-    -- Continue with outbound fallback logic if needed
-       freeswitch.consoleLog("DEBUG", "[Routing] Match type: No match with DID  Going for Outbound Call \n")
-    end
-
-    -- Check allowed days if any
-    if found and args.days and args.days ~= "" then
-        local ok, allowed_days = pcall(json.decode, args.days)
-        if not ok then
-            freeswitch.consoleLog("err", "[routing.lua] Invalid JSON in days\n")
-            session:execute("hangup")
+            -- Set variables for dialplan or next logic
+            session:setVariable("did_type", args.failover_type or "")
+            session:setVariable("did_destination", args.failover_destination or "")
+            return true -- allow Lua to continue using failover
+        else
+            freeswitch.consoleLog("WARNING", "[Routing] DID inactive today and no failover defined.\n")
             return false
         end
-
-        local today = ({"sun", "mon", "tue", "wed", "thu", "fri", "sat"})[tonumber(os.date("%w")) + 1]
-        for _, day in ipairs(allowed_days) do
-            if day == today then
-                return true
-            end
-        end
-
-        freeswitch.consoleLog("warning", "[routing.lua] Call not allowed on this day.\n")
-        return false
     end
 
-    return found
+    ------------------------------------------------------------------
+    -- If active today → proceed normally
+    ------------------------------------------------------------------
+    session:setVariable("did_type", args.destination_type or "")
+    session:setVariable("did_destination", args.destination or "")
+    freeswitch.consoleLog("info", "[Routing] Route active today, proceeding with normal DID.\n")
+    return true
 end
+
+
 
 local function user_based_domain(args)
 
