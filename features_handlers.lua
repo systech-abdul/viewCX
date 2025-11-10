@@ -58,6 +58,21 @@ function file_exists(filename)
     end
 end
 
+
+-- ==========================================
+-- Helper: Get MD5 hash of a string using fs_cli
+-- ==========================================
+local function md5_hash(text)
+    local escaped_text = text:gsub('"', '\\"')
+    -- Call fs_cli md5 command
+    local handle = io.popen('fs_cli -x "md5 ' .. escaped_text .. '"')
+    local result = handle:read("*a")
+    handle:close()
+    -- Extract only the hash
+    result = result:match("([a-f0-9]+)")
+    return result
+end
+
 -- String split utility
 local function split(inputstr, sep)
     local t = {}
@@ -84,7 +99,38 @@ end
 
 
 
+-- ==========================================
+-- Get or create base path for recordings per domain
+-- ==========================================
+local function get_base_path(domain_name, file)
+    local base = "/var/lib/freeswitch/recordings/"
 
+    -- Ensure base recordings path exists
+    local f = io.open(base, "r")
+    if not f then
+        os.execute("mkdir -p " .. base)
+    else
+        f:close()
+    end
+
+    -- Append domain
+    local path = base .. domain_name .. "/"
+
+    -- Append optional file
+    if file and file ~= "" then
+        path = path .. file .. ""
+    end
+
+    -- Ensure full domain/file path exists
+    f = io.open(path, "r")
+    if not f then
+        os.execute("mkdir -p " .. path)
+    else
+        f:close()
+    end
+
+    return path
+end
 
 
 
@@ -92,8 +138,8 @@ end
 -- 🎤 Generate TTS audio file dynamically with optional params
 -- ============================================================
 
-function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocoder, tts_denoiser, tts_ssml, tts_cache)
-    -- ✅ Defaults
+-- Generate TTS file (or fetch from cache)
+function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocoder, tts_denoiser, tts_ssml)
     tts_text     = tts_text     or "Hello, this is a test message."
     tts_server   = tts_server   or "http://localhost:5500"
     tts_voice    = tts_voice    or "espeak:en-029"
@@ -101,11 +147,8 @@ function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocode
     tts_vocoder  = tts_vocoder  or "high"
     tts_denoiser = tts_denoiser or "0.005"
     tts_ssml     = tts_ssml     or "true"
-    tts_cache    = tts_cache    or "false"
 
-    local output_file = string.format("/tmp/tts_%d.wav", os.time())
-
-    -- ✅ URL encode helper
+    -- Helper: URL encode
     local function urlencode(str)
         if str then
             str = string.gsub(str, "\n", "%%0A")
@@ -116,44 +159,52 @@ function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocode
         return str
     end
 
-    -- ✅ Build dynamic TTS URL
+    -- Ensure cache directory exists
+    local tts_cache_dir = "/var/lib/freeswitch/tts_cache"
+    os.execute("mkdir -p " .. tts_cache_dir)
+
+    -- Use MD5 hash of text for cached filename
+    local hash = md5_hash(tts_text)
+    local output_file = string.format("%s/tts_%s.wav", tts_cache_dir, hash)
+
+    -- Return cached file if exists
+    if file_exists(output_file) then
+        freeswitch.consoleLog("INFO", "[TTS] Using cached TTS file: " .. output_file .. "\n")
+        return output_file
+    end
+
+    -- Build TTS request URL
     local tts_url = string.format(
-        "%s/api/tts?voice=%s&lang=%s&vocoder=%s&denoiserStrength=%s&ssml=%s&text=%s&cache=%s",
+        "%s/api/tts?voice=%s&lang=%s&vocoder=%s&denoiserStrength=%s&ssml=%s&text=%s&cache=true",
         tts_server,
         urlencode(tts_voice),
         urlencode(tts_lang),
         urlencode(tts_vocoder),
         urlencode(tts_denoiser),
         urlencode(tts_ssml),
-        urlencode(tts_text),
-        urlencode(tts_cache)
+        urlencode(tts_text)
     )
 
-    freeswitch.consoleLog("INFO", "[TTS] Fetching: " .. tts_url .. "\n")
+    freeswitch.consoleLog("INFO", "[TTS] Fetching new TTS: " .. tts_url .. "\n")
 
-    -- ✅ Fetch TTS file
+    -- Fetch TTS file
     os.execute(string.format('curl -s -o "%s" "%s"', output_file, tts_url))
 
-    -- ✅ Wait for file to appear
-    local function wait_for_file(file_path, timeout)
-        local start = os.time()
-        while os.time() - start < timeout do
-            local f = io.open(file_path, "rb")
-            if f then f:close(); return true end
-            freeswitch.msleep(100)
-        end
-        return false
+    -- Wait for file to appear (max 5 seconds)
+    local start = os.time()
+    while os.time() - start < 5 do
+        if file_exists(output_file) then break end
+        freeswitch.msleep(100)
     end
 
-    if not wait_for_file(output_file, 5) then
-        freeswitch.consoleLog("ERR", "[TTS] File not found: " .. output_file .. "\n")
+    if not file_exists(output_file) then
+        freeswitch.consoleLog("ERR", "[TTS] Failed to generate TTS file: " .. output_file .. "\n")
         return nil
     end
 
-    freeswitch.consoleLog("INFO", "[TTS] File ready: " .. output_file .. "\n")
+    freeswitch.consoleLog("INFO", "[TTS] TTS file ready: " .. output_file .. "\n")
     return output_file
 end
-
 
 
 function find_matching_condition(node_id, domain_name, domain_uuid, ivr_menu_uuid)
@@ -297,7 +348,7 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         end)
 
         if recording_filename and recording_filename ~= '' then
-            local play_sound = "/var/lib/freeswitch/recordings/" .. domain_name .. "/" .. recording_filename
+            local play_sound = get_base_path(domain_name,recording_filename)
             session:execute("playback", play_sound)
         else
             freeswitch.consoleLog("ERR", "[route_action] Recording not found for playback.\n")
@@ -443,16 +494,7 @@ function handlers.callcenter(args)
         session:sleep(1000)
     end
     
-    -- Run background announcement/prompt Lua
-    local queue_greeting = queue_data.queue_greeting 
-  
-    if queue_greeting ~= nil and queue_greeting ~= '' then
-        local queue_greeting_sound = queue_greeting 
-        freeswitch.consoleLog("console", "[CallCenter] queue_greeting_sound: " .. tostring(queue_greeting_sound) .. "\n")
-        session:execute("playback", queue_greeting_sound)
-        session:sleep(1000)
-    end
-
+ 
     -- Parse JSON options from queue_flow_json
     local options = {}
     if queue_data.queue_flow_json and queue_data.queue_flow_json ~= '' then
@@ -524,7 +566,7 @@ function handlers.callcenter(args)
   local recording_filename= queue_data.recording_filename 
   
   if recording_filename ~= nil and recording_filename ~= '' then
-    local base_path = "/var/lib/freeswitch/recordings/" .. args.domain .. "/"
+    local base_path = get_base_path(args.domain)
     local queue_announce_sound = base_path .. queue_data.recording_filename 
 
     freeswitch.consoleLog("console", "[CallCenter] queue_announce_sound: " .. tostring(queue_announce_sound) .. "\n")
@@ -716,7 +758,7 @@ function handlers.ivr(args, counter)
 
     local ivr_menu_uuid = ivr_data.ivr_menu_uuid
     local domain_name = ivr_data.domain_name
-    local base_path = "/var/lib/freeswitch/recordings/" .. domain_name .. "/"
+    local base_path =get_base_path(domain_name)
 
     --  Build full paths for all sounds
     local greet_long_path = ivr_data.greet_long_filename and (base_path .. ivr_data.greet_long_filename) or ""
@@ -747,10 +789,10 @@ function handlers.ivr(args, counter)
 
 
     --welcome from greet_long_path only for first time 
-          if greet_long_path ~= "" then
+          if greet_long_path ~= "" and file_exists(greet_long_path) then 
+            
             freeswitch.consoleLog("console", "[IVR] welcome greet: " .. greet_long_path .. "\n")
-
-                    --session:execute("playback", greet_long_path)
+            --session:execute("playback", greet_long_path)
                 end
     
      
@@ -819,13 +861,14 @@ function handlers.ivr(args, counter)
 
     --  Play greeting and collect digits
     
-    while max_failures > 0 do
+    while max_failures > 0  and check_session()  do
         input = session:playAndGetDigits(
             min_digit, max_digit, 1, timeout, "#",
             play_greeting, nil, "[0-9*#]", "input_digits", inter_digit_timeout, nil
         )
 
         freeswitch.consoleLog("INFO", "[IVR] playAndGetDigits input: " .. tostring(input) .. "\n")
+
 
         if not input or input == "" then
             freeswitch.consoleLog("INFO", "[IVR] No input, playing no_input sound\n")
@@ -890,7 +933,7 @@ function handlers.ivr(args, counter)
 
    
     --  Route based on action
-            if not matched_action then
+            if not matched_action and   check_session() then
                 freeswitch.consoleLog(
                     "WARNING",
                     string.format(
@@ -1247,7 +1290,7 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
     end)
 
     -- Base path for recordings
-    local base_path = "/var/lib/freeswitch/recordings/" .. domain_name .. "/"
+    local base_path =get_base_path(domain_name)
 
     -- Build full paths for files
     local greeting_path = greeting_file and (base_path .. greeting_file) or ""
