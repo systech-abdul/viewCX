@@ -230,19 +230,16 @@ session:setVariable("api_match_action", tostring(match_result.action))
 session:setVariable("api_match_destination", tostring(match_result.destination))
 
 -- Perform routing based on match result
-if match_result.action ~= "no_match" then
+if match_result.action ~= "no_match" and should_hangup == "false" then
     session:execute("transfer", match_result.destination .. " XML systech")
-    return true
 else
     freeswitch.consoleLog("INFO", "[api_handler] No match found, fallback transfer.\n")
-    return false
 end
 
--- --------------------------------------------------------------
 -- Step 10: Hangup if requested
--- --------------------------------------------------------------
 if should_hangup == "true" then
     session:hangup("NORMAL_CLEARING")
 end
+
 
 return true
