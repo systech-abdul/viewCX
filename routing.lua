@@ -144,18 +144,22 @@ local function is_valid_did(dest)
                 ELSE 'no_match'
             END AS match_type,
             --  Check if current day matches in timezone
+
             CASE
-                WHEN (
-                    r.days IS NULL OR r.days = '' OR
-                    POSITION(
-                        TRIM(TO_CHAR(
-                            (CURRENT_TIMESTAMP AT TIME ZONE COALESCE(r.time_zone, 'UTC')), 
-                            'Day'
-                        )) IN r.days
-                    ) > 0
-                ) THEN true
-                ELSE false
-            END AS active_today
+      WHEN r.days IS NULL
+           OR r.days = 'null'::jsonb
+           OR (jsonb_typeof(r.days) = 'array' AND jsonb_array_length(r.days) = 0)
+        THEN true
+      WHEN jsonb_typeof(r.days) = 'array' THEN
+        EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(r.days) AS d(day_txt)
+          WHERE left(lower(d.day_txt), 3) =
+                lower(to_char((CURRENT_TIMESTAMP AT TIME ZONE coalesce(r.time_zone::text,'UTC')), 'Dy'))
+        )
+      ELSE false
+    END AS active_today
+
         FROM v_did_routes r
         JOIN v_domains d ON d.domain_uuid = r.domain_uuid
         WHERE 
