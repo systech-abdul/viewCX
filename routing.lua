@@ -1,4 +1,5 @@
 local handlers = require "features_handlers"
+local caller_handler = require "caller_handler"
 local Database = require "resources.functions.database"
 local json = require("resources.functions.lunajson")
 
@@ -6,7 +7,7 @@ local dbh = Database.new("system")
 assert(dbh:connected())
 
 debug["sql"] = false;
---session:execute("info") 
+session:execute("info") 
 -- Session setup
 session:setVariable("continue_on_fail", "3,17,18,19,20,27,USER_NOT_REGISTERED")
 session:setVariable("hangup_after_bridge", "true")
@@ -14,7 +15,7 @@ session:setVariable("hangup_after_bridge", "true")
 -- Session variables
 local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
                         session:getVariable("sip_to_user")
-local domain_name = session:getVariable("sip_req_host")
+local domain_name = session:getVariable("domain_name") or session:getVariable("sip_req_host")
 session:setVariable("domain_name",domain_name )
 local src = session:getVariable("sip_from_user")
 
@@ -67,8 +68,11 @@ local function get_domain_uuid(name)
     return result
 end
 
-local domain_uuid = get_domain_uuid(domain_name)
-session:setVariable("domain_uuid", domain_uuid)
+local domain_uuid = session:getVariable("domain_uuid") 
+if not domain_uuid or domain_uuid == "" then
+    domain_uuid = get_domain_uuid(domain_name)
+    session:setVariable("domain_uuid", domain_uuid)
+end
 
 -- session:execute("info") 
 
@@ -264,86 +268,7 @@ end
 end
 
 -- Returns: row table (columns as strings) on success, or nil on failure.
-local function upsert_caller_profile()
-    if not dbh then
-        freeswitch.consoleLog("ERR", "[caller_profile] dbh is nil\n")
-        return nil
-    end
 
-
-    local domain_uuid = session:getVariable("domain_uuid") or ""
-    local tenant_id = session:getVariable("tenant_id") or 0
-    local process_id = session:getVariable("process_id") or 0
-    local caller_number = session:getVariable("caller_id_number") or ""
-    local last_xml_cdr_uuid = session:getVariable("call_uuid") or ""
-    local language_code = session:getVariable("language_code") or ""
-
-    -- IMPORTANT for language behavior:
-    --   - nil or ""  => do NOT update language on conflict (as per SQL function)
-    --   - non-empty  => update language on conflict
-
-    local sql = [[
-        SELECT *
-        FROM public.upsert_caller_profile(
-            :domain_uuid,
-            :tenant_id,
-            :process_id,
-            :caller_number,
-            :last_xml_cdr_uuid,
-            :language_code
-        )
-    ]]
-
-    local row = nil
-
-    freeswitch.consoleLog(
-  "info",
-  string.format(
-    "[caller_profile] domain_uuid=%s, tenant_id=%s, process_id=%s, caller_number=%s, last_xml_cdr_uuid=%s, language_code=%s\n",
-    tostring(domain_uuid),
-    tostring(tenant_id),
-    tostring(process_id),
-    tostring(caller_number),
-    tostring(last_xml_cdr_uuid),
-    tostring(language_code)
-  )
-)
-
-    local ok = dbh:query(sql, {
-        domain_uuid       = domain_uuid,
-        tenant_id         = tenant_id,
-        process_id        = process_id,
-        caller_number     = caller_number,
-        last_xml_cdr_uuid = last_xml_cdr_uuid,
-        language_code     = language_code,
-    }, function(r)
-        row = r
-    end)
-
-    if not ok then
-        freeswitch.consoleLog("ERR", "[caller_profile] DB query failed\n")
-        return nil
-    end
-
-    if not row then
-        freeswitch.consoleLog("ERR", "[caller_profile] no row returned from upsert\n")
-        return nil
-    end
-
-    session:setVariable("language_code", row.language_code)
-    -- optional logging
-    freeswitch.consoleLog("INFO", string.format(
-        "[caller_profile] caller=%s tenant=%s process=%s calls=%s lang=%s id=%s\n",
-        row.caller_number or "nil",
-        row.tenant_id or "nil",
-        row.process_id or "nil",
-        row.call_count or "nil",
-        row.language_code or "nil",
-        row.id or "nil"
-    ))
-
-    return row
-end
 
 
 local function user_based_domain(args)
@@ -397,7 +322,7 @@ end
 local function dispatch(dest)
     local num_dest = tonumber(dest)
     local valid_did = is_valid_did(dest)
-    local upsert_caller_profile = upsert_caller_profile()
+    local upsert_caller_profile = caller_handler.upsert_caller_profile()
 
     if valid_did then
         return handlers.handle_did_call(args)
