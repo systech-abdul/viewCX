@@ -1,4 +1,5 @@
 json = require "resources.functions.lunajson"
+local caller_handler = require "caller_handler"
 
 api = freeswitch.API()
 local handlers = {}
@@ -667,11 +668,13 @@ function handlers.ivr(args, counter)
     local dest_phone = session:getVariable("destination_number") or session:getVariable("sip_req_user") or session:getVariable("sip_to_user")
     local call_start_time = session:getVariable("start_stamp")
     local call_uuid = session:getVariable("uuid")
+    local language_code = session:getVariable("language_code") or ""
 
     lua_ivr_vars["src_phone"] = src_phone
     lua_ivr_vars["dest_phone"] = dest_phone
     lua_ivr_vars["call_start_time"] = call_start_time
     lua_ivr_vars["call_uuid"] = call_uuid
+    lua_ivr_vars["language"] = language_code
 
     args.ivr_path = args.ivr_path or {}
     counter = counter or { count = 0 }
@@ -690,6 +693,7 @@ function handlers.ivr(args, counter)
             m.ivr_menu_invalid_sound AS invalid_sound,
             m.ivr_menu_exit_sound AS exit_sound,
             m.ivr_menu_no_input_sound AS no_input_sound,  
+            m.language AS language,  
             -- Recording filenames
             r_long.recording_filename   AS greet_long_filename,
             r_short.recording_filename  AS greet_short_filename,
@@ -734,6 +738,7 @@ function handlers.ivr(args, counter)
             m.ivr_menu_invalid_sound,
             m.ivr_menu_exit_sound,
             m.ivr_menu_no_input_sound,  
+            m.language,
             m.ivr_menu_confirm_macro,
             m.ivr_menu_name,
             m.ivr_menu_uuid,
@@ -766,7 +771,25 @@ function handlers.ivr(args, counter)
     local invalid_sound_path = ivr_data.invalid_sound_filename and (base_path .. ivr_data.invalid_sound_filename) or ""
     local exit_sound_path = ivr_data.exit_sound_filename and (base_path .. ivr_data.exit_sound_filename) or ""
     local no_input_sound_path = ivr_data.no_input_sound_filename and (base_path .. ivr_data.no_input_sound_filename) or ""
+    local language = ivr_data.language or ""
 
+    local current_language = session:getVariable("language_code") or ""
+
+    freeswitch.consoleLog("INFO", "[IVR] Session language : " .. tostring(current_language) .. " | Menu Language : " .. tostring(language) .. "\n")
+    -- if language is not nil/empty, save to session
+    if language ~= nil and language ~= "" then
+        if current_language ~= language then
+            session:setVariable("language_code", language)
+            session:setVariable("domain_uuid", domain_uuid)
+            freeswitch.consoleLog("INFO", "[IVR] Set session language_code = " .. tostring(language) .. "\n")
+            -- If caller_handler.lua returns a module with the function:
+            if caller_handler and caller_handler.upsert_caller_profile then
+                caller_handler.upsert_caller_profile(params)
+            else
+                freeswitch.consoleLog("ERR", "[IVR] upsert_caller_profile not found on caller_handler\n")
+            end
+        end
+    end
     --  Generate dynamic TTS (if playback_type=text)
     if ivr_data.playback_type == "text" and ivr_data.playback_text and ivr_data.playback_text ~= "" then
         local tts_text = ivr_data.playback_text:gsub("%${(.-)}", function(var)
