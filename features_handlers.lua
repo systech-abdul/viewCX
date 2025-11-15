@@ -790,6 +790,8 @@ function handlers.ivr(args, counter)
             end
         end
     end
+
+     freeswitch.consoleLog("console", "[IVR] ivr_data.playback_type ".. ivr_data.playback_type)
     --  Generate dynamic TTS (if playback_type=text)
     if ivr_data.playback_type == "text" and ivr_data.playback_text and ivr_data.playback_text ~= "" then
         local tts_text = ivr_data.playback_text:gsub("%${(.-)}", function(var)
@@ -811,12 +813,7 @@ function handlers.ivr(args, counter)
     end
 
 
-    --welcome from greet_long_path only for first time 
-          if greet_long_path ~= "" and file_exists(greet_long_path) then 
-            
-            freeswitch.consoleLog("console", "[IVR] welcome greet: " .. greet_long_path .. "\n")
-            --session:execute("playback", greet_long_path)
-                end
+   
     
      
     --  Timing and logic setup
@@ -861,20 +858,8 @@ function handlers.ivr(args, counter)
 
     --  Smart greeting selection (root vs nested IVR)
     local parent_ivr_id = session:getVariable("parent_ivr_id")
-    local play_greeting = ""
+   
 
-      -- Determine which greeting to play
-     if greet_short_path ~= "" and file_exists(greet_short_path) then
-        play_greeting = greet_short_path
-        freeswitch.consoleLog("INFO", "[IVR] Using greet_short: " .. play_greeting .. "\n")
-    -- Fallback to greet_long
-    elseif greet_long_path ~= "" and file_exists(greet_long_path) then
-        play_greeting = greet_long_path
-        freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_long: " .. play_greeting .. "\n")
-    else
-        freeswitch.consoleLog("WARNING", "[IVR] No valid greeting file found\n")
-    end
-    
 
     
     ------------------------------------------------------
@@ -882,9 +867,37 @@ function handlers.ivr(args, counter)
     ------------------------------------------------------
     local input, matched_action, action_type, target = nil, nil, nil, nil
 
-    --  Play greeting and collect digits
-    
+    --  Play greeting and collect digits 
+   
+    local play_greeting = ""
+    local greet_counter =0
     while max_failures > 0  and check_session()  do
+
+         if greet_counter ==0 then
+            freeswitch.consoleLog("console", "[IVR] welcome greet at greet_counter 0 " .. greet_long_path .. "\n")
+             --welcome from greet_long_path only for first time 
+            play_greeting = greet_long_path;
+        
+        
+         else
+              if greet_short_path ~= "" and file_exists(greet_short_path) then
+        play_greeting = greet_short_path
+        freeswitch.consoleLog("INFO", "[IVR] Using greet_short: " .. play_greeting .. "\n")
+          -- Fallback to greet_long
+          elseif greet_long_path ~= "" and file_exists(greet_long_path) then
+              play_greeting = greet_long_path
+              freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_long: " .. play_greeting .. "\n")
+          else
+              freeswitch.consoleLog("WARNING", "[IVR] No valid greeting file found\n")
+          end
+            
+
+        end
+
+            
+        
+      
+
         input = session:playAndGetDigits(
             min_digit, max_digit, 1, timeout, "#",
             play_greeting, nil, "[0-9*#]", "input_digits", inter_digit_timeout, nil
@@ -897,6 +910,7 @@ function handlers.ivr(args, counter)
             freeswitch.consoleLog("INFO", "[IVR] No input, playing no_input sound\n")
             if no_input_sound_path ~= "" then session:execute("playback", no_input_sound_path) end
             max_failures = max_failures - 1
+            greet_counter =greet_counter+1
             goto continue
         end
 
@@ -916,6 +930,7 @@ function handlers.ivr(args, counter)
             freeswitch.consoleLog("INFO", "[IVR] Invalid input, playing invalid sound\n")
             if invalid_sound_path ~= "" then session:execute("playback", invalid_sound_path) end
             max_failures = max_failures - 1
+            greet_counter =greet_counter+1
             goto continue
         end
 
