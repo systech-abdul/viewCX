@@ -88,8 +88,7 @@ end
 local endpoint = api_settings.endpoint or ""
 local method = string.lower(api_settings.method or "post")
 local headers = json.decode(api_settings.headers or "{}") or {}
-local static_payload = json.decode(api_settings.payload or "{}") or {}
-local key_based_actions = api_settings.key_based_actions or "[]"  -- comes as JSON text
+
 
 -- Handle authentication if enabled
 if api_settings.authentication == "true" or api_settings.authentication == true then
@@ -103,12 +102,59 @@ if api_settings.authentication == "true" or api_settings.authentication == true 
     end
 end
 
+local static_payload = json.decode(api_settings.payload or "{}") or {}
+local key_based_actions = api_settings.key_based_actions or "[]"  -- comes as JSON text
+
 -- --------------------------------------------------------------
--- Step 4: Build request payload
+-- Step 3.1: Parse variable data from static payload with variables
 -- --------------------------------------------------------------
+
+
+
+
+-- recursively apply {{key}} placeholders in strings / tables
+local function apply_template(value, data)
+    local t = type(value)
+
+    if t == "string" then
+        return (value:gsub("{{(.-)}}", function(key)
+            key = key:match("^%s*(.-)%s*$")   -- trim spaces
+            local v = data and data[key] or nil
+            -- 2) if not found, try from session variables
+            if v == nil and session ~= nil then
+                v = session:getVariable(key)
+            end
+            return v or ""
+        end))
+
+    elseif t == "table" then
+        local out = {}
+        for k, v in pairs(value) do
+            out[k] = apply_template(v, data)
+        end
+        return out
+
+    else
+        return value
+    end
+end
+
+-- 🔹 Decode dynamic data FIRST
 local dynamic_data = json.decode(encoded_payload or "{}") or {}
-static_payload["variables"] = dynamic_data
-local json_payload = json.encode(static_payload)
+
+freeswitch.consoleLog("INFO", "[api_handler] type(static_payload) = " .. type(static_payload) .. "\n")
+freeswitch.consoleLog("INFO", "[api_handler] static_payload = " .. tostring(static_payload) .. "\n")
+freeswitch.consoleLog("INFO", "[api_handler] type(dynamic_data) = " .. type(dynamic_data) .. "\n")
+
+-- 🔹 Use decoded table (dynamic_data), not the JSON string (encoded_payload)
+local final_payload = apply_template(static_payload, dynamic_data)
+
+-- attach variables
+final_payload["variables"] = dynamic_data
+
+local json_payload = json.encode(final_payload)
+
+freeswitch.consoleLog("INFO", "[api_handler] final json_payload = " .. json_payload .. "\n")
 
 -- --------------------------------------------------------------
 -- Step 5: Prepare FreeSWITCH curl vars
@@ -190,7 +236,7 @@ local merged_data = merge_tables(dynamic_data, decoded_response)
 
 -- Encode to JSON for logging or further use
 local merged_json = json.encode(merged_data)
-freeswitch.consoleLog("INFO", "[api_handler] Merged Data: " .. merged_json .. "\n")
+-- freeswitch.consoleLog("INFO", "[api_handler] Merged Data: " .. merged_json .. "\n")
 
 
 if call_uuid and merged_json then
