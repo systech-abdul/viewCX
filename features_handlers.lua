@@ -1,6 +1,6 @@
 json = require "resources.functions.lunajson"
 local caller_handler = require "caller_handler"
-
+local vm = require "custom_voicemail"
 api = freeswitch.API()
 local handlers = {}
 
@@ -1310,7 +1310,7 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
     -- Build SQL query
     local sql = string.format([[ 
         SELECT 
-            v.voicemail_id,
+            v.voicemail_id, v.playback_terminator, v.beep_tone,
             r1.recording_filename AS greeting_filename,
             r2.recording_filename AS thanks_filename
         FROM v_voicemails v
@@ -1325,6 +1325,8 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
         freeswitch.consoleLog("INFO", "[voicemail] Found voicemail record for ID: " .. row.voicemail_id .. "\n")
         greeting_file = row.greeting_filename
         thanks_file = row.thanks_filename
+        playback_terminator = row.playback_terminator
+        beep_tone = row.beep_tone
     end)
 
     -- Base path for recordings
@@ -1336,8 +1338,8 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
 
     -- Play greeting first if exists
     if greeting_path ~= "" then
-        freeswitch.consoleLog("INFO", "[voicemail] Playing greeting: " .. greeting_path .. "\n")
-        session:execute("playback", greeting_path)
+        -- freeswitch.consoleLog("INFO", "[voicemail] Playing greeting: " .. greeting_path .. "\n")
+        -- session:execute("playback", greeting_path)
     end
 
     -- Continue to voicemail
@@ -1347,14 +1349,27 @@ function voicemail_handler(destination_number, domain_name, domain_uuid)
     session:setVariable("skip_instructions", "true")
     session:setVariable("voicemail_terminate_on_silence", "false")
     session:setVariable("domain_name", domain_name)
-
+    session:setVariable("voicemail_id", destination_number)
+    local record_base_dir = string.format("/var/lib/freeswitch/recordings/%s", domain_name)
+    record_base_dir = record_base_dir .. "/voicemails"
     local args = string.format("%s %s %s", profile, domain_name, destination_number)
-    session:execute("voicemail", args)
+    -- session:execute("voicemail", args)
+
+    vm.record_voicemail(session, {
+        -- all optional: override defaults only if you need to
+        beep_tone        = beep_tone,
+        playback_terminator = playback_terminator,
+        record_base_dir   = record_base_dir,
+        welcome_file      = greeting_path,
+        thanks_file       = thanks_path,
+        max_len_seconds   = 600,
+        silence_threshold = 0,
+    })
 
     -- Play thank-you message after recording, if exists
     if thanks_path ~= "" then
-        freeswitch.consoleLog("INFO", "[voicemail] Playing thanks message: " .. thanks_path .. "\n")
-        session:execute("playback", thanks_path)
+        -- freeswitch.consoleLog("INFO", "[voicemail] Playing thanks message: " .. thanks_path .. "\n")
+        -- session:execute("playback", thanks_path)
     end
 
     return true
