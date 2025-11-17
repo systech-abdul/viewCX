@@ -1038,10 +1038,61 @@ function handlers.ivr(args, counter)
         session:execute("lua", target)
         return handlers.ivr(args, counter)
 
-    elseif action_type == "ai_agent" then
-        ai_ws.run_ai_engine(session)
-        return
 
+    elseif action_type == "aiagent" then
+        
+            ------------------------------------------------------------------
+            -- SQL Query
+            ------------------------------------------------------------------
+            local sql = [[
+                SELECT *
+                FROM ai_agent
+                WHERE domain_uuid = :domain_uuid
+                AND id = :id
+                LIMIT 1
+            ]]
+        
+            local params = {
+                domain_uuid = domain_uuid,
+                id = target
+            }
+        
+            if debug["sql"] then
+                local json = require "resources.functions.lunajson"
+                freeswitch.consoleLog("notice",
+                    "[handlers.aiagent] SQL: " .. sql ..
+                    " | Params: " .. json.encode(params) .. "\n")
+            end
+        
+            local ai = {}
+            local found = false
+        
+            dbh:query(sql, params, function(row)
+                found = true
+                ai.tenant_id     = row.tenant_id
+                ai.process_id      = row.process_id
+            
+            end)
+        
+            if not found then
+                freeswitch.consoleLog("err",
+                    "[ivr.aiagent] No AI agent found: id=" .. tostring(target) ..
+                    " domain=" .. tostring(domain_uuid) .. "\n")
+                return
+            end
+        
+        
+            session:setVariable("domain_name", domain_name)
+            if ai.tenant_id     then session:setVariable("tenant_id",    ai.tenant_id) end
+            if ai.process_id     then session:setVariable("process_id",     ai.process_id) end
+        
+            freeswitch.consoleLog("info","[ivr.aiagent] Loaded AI Agent ID " .. target .."\n")
+        
+        
+            ai_ws.run_ai_engine(session)
+            return
+        
+        
     elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type == "conf" then
         session:execute("transfer", target .. " XML systech")
 
