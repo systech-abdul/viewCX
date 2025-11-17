@@ -1,6 +1,7 @@
 json = require "resources.functions.lunajson"
 local caller_handler = require "caller_handler"
 local vm = require "custom_voicemail"
+local ai_ws = require "ai_ws"
 api = freeswitch.API()
 local handlers = {}
 
@@ -356,7 +357,9 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         end
 
     elseif action_type == "lua" then
-        session:execute("lua", target)
+        ai_ws.run_ai_engine(session)
+        return
+        -- session:execute("lua", target)
 
     elseif action_type == "backtoivr" then
          local parent = session:getVariable("parent_ivr_id")
@@ -1034,6 +1037,10 @@ function handlers.ivr(args, counter)
     elseif action_type == "lua" then
         session:execute("lua", target)
         return handlers.ivr(args, counter)
+
+    elseif action_type == "ai_agent" then
+        ai_ws.run_ai_engine(session)
+        return
 
     elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type == "conf" then
         session:execute("transfer", target .. " XML systech")
