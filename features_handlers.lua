@@ -2,6 +2,8 @@ json = require "resources.functions.lunajson"
 local caller_handler = require "caller_handler"
 local vm = require "custom_voicemail"
 local ai_ws = require "ai_ws"
+local outbound_routes = require "outbound_routes"
+
 api = freeswitch.API()
 local handlers = {}
 
@@ -249,6 +251,8 @@ function find_matching_condition(node_id, domain_name, domain_uuid, ivr_menu_uui
     }
     local data_json = json.encode(data)
 
+     freeswitch.consoleLog("console", "data======="..data_json)
+
     -- Decode JSON safely
     local ok1, conditions = pcall(json.decode, condition_json or "[]")
     local ok2, data_table = pcall(json.decode, data_json or "{}")
@@ -360,6 +364,11 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         ai_ws.run_ai_engine(session)
         return
         -- session:execute("lua", target)
+
+
+     elseif action_type == "node" then
+        find_matching_condition(tonumber(target), domain_name, domain_uuid, ivr_menu_uuid)
+        return
 
     elseif action_type == "backtoivr" then
          local parent = session:getVariable("parent_ivr_id")
@@ -1126,52 +1135,64 @@ function handlers.outbound(args)
     local dest = session:getVariable("destination_number")
     local preferred_gateway_uuid = session:getVariable("preferred_gateway_uuid")
 
-    freeswitch.consoleLog("info", "[handlers.outbound] Routing outbound to: " .. tostring(dest) .. " | Domain UUID: " ..
-        tostring(domain_uuid) .. "\n")
+    freeswitch.consoleLog("info", "[handlers.outbound] Routing outbound to: " .. tostring(dest) ..
+        " | Domain UUID: " .. tostring(domain_uuid) .. "\n")
 
+    local route_info = nil
     local gateway_uuid = nil
+    local dial_number = dest
 
     if preferred_gateway_uuid and preferred_gateway_uuid ~= "" then
         gateway_uuid = preferred_gateway_uuid
-        freeswitch.consoleLog("console",
+        freeswitch.consoleLog("info",
             "[handlers.outbound] Using preferred gateway UUID from session: " .. gateway_uuid .. "\n")
     else
-        -- Query one from DB if no preferred_gateway_uuid
-        local sql = [[
-            SELECT gateway_uuid
-            FROM v_gateways
-            WHERE domain_uuid = :domain_uuid
-            ORDER BY gateway_uuid  -- Or use a priority field if available
-            LIMIT 1
-        ]]
-        local params = {
-            domain_uuid = domain_uuid
-        }
+        -- Use outbound_routes table to find matching route
+        route_info = outbound_routes.dialoutmatchForoutbound_routes(dest, domain_uuid)
 
-        if debug["sql"] then
-            local json = require "resources.functions.lunajson"
-            freeswitch.consoleLog("notice",
-                "[handlers.outbound] SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
-        end
+        if route_info then
+            gateway_uuid = route_info.route.gateway_uuid
+            dial_number = route_info.dial_number
+            freeswitch.consoleLog("console",
+                "[handlers.outbound] Matched route: " .. route_info.route.name .. " | Gateway: " .. gateway_uuid ..
+                " | Dial number: " .. dial_number .. "\n")
+        else
+            -- fallback: pick first gateway from DB
+            local sql = [[
+                SELECT gateway_uuid
+                FROM v_gateways
+                WHERE domain_uuid = :domain_uuid
+                ORDER BY gateway_uuid
+                LIMIT 1
+            ]]
+            local params = { domain_uuid = domain_uuid }
 
-        dbh:query(sql, params, function(row)
-            gateway_uuid = row.gateway_uuid
-        end)
+            if debug["sql"] then
+                freeswitch.consoleLog("notice",
+                    "[handlers.outbound] SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
+            end
 
-        if not gateway_uuid then
-            freeswitch.consoleLog("err", "[handlers.outbound] No gateway_uuid found in DB\n")
-            return false
+            dbh:query(sql, params, function(row)
+                gateway_uuid = row.gateway_uuid
+            end)
+
+            if not gateway_uuid then
+                freeswitch.consoleLog("err", "[handlers.outbound] No gateway_uuid found in DB\n")
+                return false
+            end
         end
     end
 
-    local bridge_dest =
-        "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}sofia/gateway/" .. gateway_uuid .. "/" .. dest
+    -- Bridge the call
+    local bridge_dest = "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+                        "sofia/gateway/" .. gateway_uuid .. "/" .. dial_number
 
     freeswitch.consoleLog("info", "[handlers.outbound] Bridging to: " .. bridge_dest .. "\n")
 
     session:execute("bridge", bridge_dest)
     return true
 end
+
 
 -- DID-based call dispatcher
 function handlers.handle_did_call(args)
