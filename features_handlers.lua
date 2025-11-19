@@ -743,7 +743,7 @@ function handlers.ivr(args, counter)
 
         WHERE m.ivr_menu_extension = :destination
           AND m.domain_uuid = :domain_uuid
-
+        AND m.deleted_at IS NULL
         GROUP BY
             m.ivr_menu_greet_long,
             m.ivr_menu_greet_short,
