@@ -305,10 +305,14 @@ end
 
 -- Reusable function to handle IVR routing actions
 function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uuid)
+
+    freeswitch.consoleLog("INFO", string.format("[feature_handler][route_action] : action_type=%s | target=%s | domain_name=%s | domain_uuid=%s | ivr_menu_uuid=%s \n", action_type, target, domain_name, domain_uuid, ivr_menu_uuid ))
+    
     if not check_session() then
         return false
     end
 
+    session:answer()
     if action_type == "voicemail" then
         session:setVariable("destination_number", target)
         voicemail_handler(target, domain_name, domain_uuid)
@@ -366,7 +370,7 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         -- session:execute("lua", target)
 
 
-     elseif action_type == "node" then
+    elseif action_type == "node" or action_type == "condition-node" then
         find_matching_condition(tonumber(target), domain_name, domain_uuid, ivr_menu_uuid)
         return
 
@@ -1211,12 +1215,22 @@ function handlers.handle_did_call(args)
     session:setVariable("verified_did", "true")
     
 
-    local did_type        = session:getVariable("did_type") or ""
-    local did_destination = session:getVariable("did_destination") or ""
+    local did_type        = session:getVariable("did_type") or session:getVariable("destination_type") or ""
+    local did_destination = session:getVariable("destination") or ""
     local domain_name     = session:getVariable("domain_name") or ""
     local domain_uuid     = session:getVariable("domain_uuid") or ""
     args.domain = domain_name;
    
+    if not did_type or did_type == "" then
+        freeswitch.consoleLog("WARNING", "[routing] No did_type \n")
+        return
+    end
+
+    if not did_destination or did_destination == "" then
+        freeswitch.consoleLog("WARNING", "[routing] No did_destination \n")
+        return
+    end
+
 
     freeswitch.consoleLog(
         "info",
@@ -1337,7 +1351,7 @@ function did_ivrs(id)
 
     -- Single query to join ivrs and v_ivr_menus
     local sql = string.format([[
-        SELECT menu.ivr_menu_uuid, menu.ivr_menu_extension, menu.domain_uuid
+        SELECT menu.ivr_menu_uuid, menu.ivr_menu_name, menu.ivr_menu_extension, menu.domain_uuid
         FROM v_ivr_menus AS menu
         JOIN ivrs ON ivrs.start_node = menu.ivr_menu_uuid
         WHERE ivrs.id = %d
@@ -1348,6 +1362,7 @@ function did_ivrs(id)
     dbh:query(sql, function(row)
         found = true
         args.start_node = row.ivr_menu_uuid
+        args.menu_name = row.ivr_menu_name
         args.destination = row.ivr_menu_extension
         args.domain_uuid = row.domain_uuid
     end)
@@ -1355,10 +1370,7 @@ function did_ivrs(id)
     
 
     if found then
-        freeswitch.consoleLog("info", "[did_ivrs] IVR Menu found: " ..
-            "UUID = " .. tostring(args.start_node) ..
-            ", destination = " .. tostring(args.destination) ..
-            ", domain_uuid = " .. tostring(args.domain_uuid) .. "\n")
+        freeswitch.consoleLog("info", "[did_ivrs] IVR Menu found: " .. "UUID = " .. tostring(args.start_node) .. ", menu_name = " .. tostring(args.menu_name) .. ", destination = " .. tostring(args.destination) .. ", domain_uuid = " .. tostring(args.domain_uuid) .. "\n")
 
         -- Call IVR handler with args  
         
