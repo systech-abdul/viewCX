@@ -775,7 +775,9 @@ function handlers.ivr(args, counter)
             MIN(d.domain_name::text) AS domain_name,
             MIN(m.variables::text) AS parent_variable,
             m.playback_type,
+            m.playback_type_short,
             m.playback_text,
+            m.playback_text_short,
             m.ivr_menu_exit_app,
             m.ivr_menu_exit_data
 
@@ -868,6 +870,27 @@ function handlers.ivr(args, counter)
         if tts_file and tts_file ~= "" then
             greet_long_path = tts_file
             freeswitch.consoleLog("INFO", "[IVR] Using generated TTS file: " .. greet_long_path .. "\n")
+        else
+            freeswitch.consoleLog("ERR", "[IVR] Failed to generate TTS file\n")
+        end
+    end
+
+     freeswitch.consoleLog("console", "[IVR] ivr_data.playback_type_short ".. ivr_data.playback_type_short)
+    --  Generate dynamic TTS (if playback_type_short=text)
+    if ivr_data.playback_type_short == "text" and ivr_data.playback_text_short and ivr_data.playback_text_short ~= "" then
+        local tts_text = ivr_data.playback_text_short:gsub("%${(.-)}", function(var)
+            return lua_ivr_vars[var] or session:getVariable(var) or ""
+        end)
+
+        freeswitch.consoleLog("INFO", "[IVR] Generating TTS for text: " .. tts_text .. "\n")
+
+        local tts_file = generate_tts_file(
+            tts_text, "http://localhost:5500", "coqui-tts:en_ljspeech", "en", "high", "0.005", "true", "true"
+        )
+
+        if tts_file and tts_file ~= "" then
+            greet_short_path = tts_file
+            freeswitch.consoleLog("INFO", "[IVR] Using generated TTS file: " .. greet_short_path .. "\n")
         else
             freeswitch.consoleLog("ERR", "[IVR] Failed to generate TTS file\n")
         end
@@ -1280,7 +1303,7 @@ function handlers.handle_did_call(args)
     
 
     local did_type        = session:getVariable("did_type") or session:getVariable("destination_type") or ""
-    local did_destination = session:getVariable("destination") or ""
+    local did_destination = session:getVariable("did_destination") or ""
     local domain_name     = session:getVariable("domain_name") or ""
     local domain_uuid     = session:getVariable("domain_uuid") or ""
     args.domain = domain_name;
