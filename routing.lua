@@ -13,7 +13,7 @@ session:setVariable("continue_on_fail", "3,17,18,19,20,27,USER_NOT_REGISTERED")
 session:setVariable("hangup_after_bridge", "true")
 
 -- Session variables
-local destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
+local did_destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
                         session:getVariable("sip_to_user")
 local domain_name = session:getVariable("domain_name") or session:getVariable("sip_req_host")
 session:setVariable("domain_name",domain_name )
@@ -47,7 +47,7 @@ end
 
 ---checking all required param is ready .........
 
-if not session:ready() or not destination or destination == "" then
+if not session:ready() or not did_destination or did_destination == "" then
     freeswitch.consoleLog("err", "[routing.lua] Missing or invalid destination.\n")
     session:execute("playback", "ivr/ivr-no_route_destination.wav")
     return
@@ -84,41 +84,12 @@ end
 -- local did_num = destination 
 --
 -- freeswitch.consoleLog("console","uuid ---------".. uuid);
---
--- if uuid and domain_uuid then
---    local sql = [[
---        UPDATE channels
---        SET domain_name = :domain_name,
---            domain_uuid = :domain_uuid,
---            did_num = :did_num,
---            sip_call_id = :sip_call_id
---        WHERE uuid = :uuid
---    ]]
---
---    local params = {
---        domain_name = domain_name,
---        domain_uuid = domain_uuid,
---        did_num = did_num,
---        sip_call_id = sip_call_id,
---        uuid = uuid
---    }
---
---    -- Optional SQL debug
---    if debug["sql"] then
---        local json = require "resources.functions.lunajson"
---        freeswitch.consoleLog("notice",
---            "[routing.lua] SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
---    end
---
---    dbh:query(sql, params)
--- else
---    freeswitch.consoleLog("warning",
---        "[routing.lua] Skipping channel update — uuid or domain_uuid is missing.\n")
--- end
 
+
+-- session:execute("hangup")
 -- Routing args
 local args = {
-    destination = destination,
+    destination = did_destination,
     domain = domain_name,
     domain_uuid = domain_uuid
 }
@@ -131,112 +102,86 @@ local function is_valid_did(dest)
     ------------------------------------------------------------------
     -- SQL: include failover_type, failover_destination, and day validity
     ------------------------------------------------------------------
-    local sql = [[
-        SELECT 
-            r.*, 
-            r.time_zone, 
-            r.failover_type,
-            r.failover_destination,
-            r.tenant_id,
-            r.process_id,
-            d.domain_name,
-            CASE
-                WHEN r.src_regex_pattern = '*' THEN 'matched_star'
-                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
-                     && ARRAY[REPLACE(:src, '+', '')]
-                     AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 'match_both_src_and_caler_ip'
-                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
-                     && ARRAY[REPLACE(:src, '+', '')] THEN 'matched_src'
-                ELSE 'no_match'
-            END AS match_type,
-            --  Check if current day matches in timezone
 
-            CASE
-      WHEN r.days IS NULL
-           OR r.days = 'null'::jsonb
-           OR (jsonb_typeof(r.days) = 'array' AND jsonb_array_length(r.days) = 0)
-        THEN true
-      WHEN jsonb_typeof(r.days) = 'array' THEN
-        EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements_text(r.days) AS d(day_txt)
-          WHERE left(lower(d.day_txt), 3) =
-                lower(to_char((CURRENT_TIMESTAMP AT TIME ZONE coalesce(r.time_zone::text,'UTC')), 'Dy'))
-        )
-      ELSE false
-    END AS active_today
+    local function sql_escape(value)
+        if value == nil then
+            return "NULL"                  -- unquoted SQL NULL
+        end
+        local s = tostring(value)
+        s = s:gsub("'", "''")            -- escape single quotes
+        return "'" .. s .. "'"           -- wrap in single quotes
+    end
 
-        FROM v_did_routes r
-        JOIN v_domains d ON d.domain_uuid = r.domain_uuid
-        WHERE 
-            r.did_num = :dest
-            AND (
-                r.src_regex_pattern = '*'
-                OR string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
-                   && ARRAY[REPLACE(:src, '+', '')]
-            )
-            AND r.enabled = true
-            AND (r.ip_check IS NULL OR r.ip_check = :caller_ip)
-        ORDER BY 
-            CASE 
-                WHEN r.src_regex_pattern = '*' THEN 2
-                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
-                     && ARRAY[REPLACE(:src, '+', '')]
-                     AND (r.ip_check IS NULL OR r.ip_check = :caller_ip) THEN 0
-                WHEN string_to_array(REPLACE(r.src_regex_pattern, '+', ''), ',')
-                     && ARRAY[REPLACE(:src, '+', '')] THEN 1
-                ELSE 3
-            END
-        LIMIT 1
-    ]]
+
+    -- Build SQL safely-ish
+    local sql = string.format([[
+    SELECT fn_did_routing(
+        %s,  -- p_did_num
+        %s,  -- p_src_regex_pattern
+        %s   -- p_caller_ip
+    )::text AS route_json;
+    ]],
+    sql_escape(did_destination),
+    sql_escape(src),
+    sql_escape(caller_ip)
+    )
+
+    freeswitch.consoleLog("INFO", "[routing] SQL: " .. sql .. "\n")
 
     ------------------------------------------------------------------
     -- Execute SQL
     ------------------------------------------------------------------
     local found = nil
  
+    local route_json_str
 
-    dbh:query(sql, {
-        src = tostring(src),
-        dest = tostring(dest),
-        caller_ip = tostring(caller_ip)
-    }, function(row)
-        for k, v in pairs(row) do
-            args[k] = v
-        end
-        found = true
-
-        freeswitch.consoleLog("info", "[Routing] DID found for " .. dest .. "\n")
-        freeswitch.consoleLog("info", "[Routing] caller number " .. tostring(caller_id_number) .. "\n")
-        freeswitch.consoleLog("info", "[Routing] Time Zone: " .. tostring(row.time_zone) .. "\n")
-        freeswitch.consoleLog("console", "[Routing] Active Today: " .. tostring(row.active_today) .. "\n")
-        session:setVariable("tenant_id",tostring(row.tenant_id) )
-        session:setVariable("process_id",tostring(row.process_id) )
-        session:setVariable("domain_name",tostring(row.domain_name) )
-        session:setVariable("domain_uuid",tostring(row.domain_uuid) )
-        freeswitch.consoleLog("console", "[Routing] domain_name: " .. tostring(row.domain_name) .. "\n")
-        freeswitch.consoleLog("console", "[Routing] domain_uuid: " .. tostring(row.domain_uuid) .. "\n")
---[[ 
-        if row.failover_destination and row.failover_destination ~= "" then
-            freeswitch.consoleLog("info", "[Routing] Failover Number: " .. row.failover_destination .. "\n")
-        end ]]
+    dbh:query(sql, function(row)
+    -- column alias: route_json
+    route_json_str = row.route_json
     end)
 
-    ------------------------------------------------------------------
-    -- If no DID match at all
-    ------------------------------------------------------------------
-  if not found then
-    freeswitch.consoleLog(
-        "warning",
-        string.format(
-            "[Routing] No DID match found | Dest: %s | Src: %s | SrcIP: %s\n",
-            tostring(dest or "nil"),
-            tostring(src or "nil"),
-            tostring(caller_ip or "nil")
-        )
-    )
-    return false
-end
+
+    if not route_json_str or route_json_str == "" then
+    freeswitch.consoleLog("WARNING", "[routing] No routing row returned\n")
+    -- handle: maybe default / hard-coded failover
+    return
+    end
+
+    -- Parse JSON
+    local ok, route = pcall(json.decode, route_json_str)
+    if not ok or type(route) ~= "table" then
+    freeswitch.consoleLog("ERR", "[routing] Failed to decode JSON: " .. tostring(route_json_str) .. "\n")
+    return
+    end
+
+    freeswitch.consoleLog("INFO", "[routing] Route type: " .. tostring(route.route_type) .. ", dest_type=" .. tostring(route.destination_type) .. ", dest=" .. tostring(route.destination) .. "\n")
+
+    local destination_type = route.destination_type or ""
+    local destination = route.destination or ""
+
+    -- Example: set channel vars based on result
+    if route.destination and route.destination_type then
+    session:setVariable("v_did_route_uuid", route.did_route_uuid or "")
+    session:setVariable("v_route_type", route.route_type or "")
+    session:setVariable("v_destination_type", route.destination_type or "")
+    session:setVariable("v_destination", route.destination or "")
+    session:setVariable("match_type", route.match_type or "")
+    -- session:setVariable("active_today", route.active_today or "")
+    session:setVariable("route_type", route.route_type or "")
+    session:setVariable("destination_type", route.destination_type or "")
+    session:setVariable("destination", route.destination or "")
+    session:setVariable("tenant_id", route.tenant_id or "")
+    session:setVariable("process_id", route.process_id or "")
+    session:setVariable("domain_uuid", route.domain_uuid or "")
+    session:setVariable("domain_name", route.domain_name or "")
+    session:setVariable("time_zone", route.time_zone or "")
+    else
+    -- Nothing usable, maybe log and hangup or go to a default IVR
+    freeswitch.consoleLog("WARNING", "[routing] No destination resolved, fallback logic should run\n")
+        if tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
+            return handlers.outbound(args)
+        end
+    end
 
 
     ------------------------------------------------------------------
@@ -275,7 +220,7 @@ local function user_based_domain(args)
 
     freeswitch.consoleLog("info", "user_based_extension " .. tostring(args.destination) .. "\n")
 
-    local destination = args.destination
+    local destination = args.did_destination
     local domain_uuid = args.domain_uuid
 
     if not domain_uuid or not destination then
@@ -319,7 +264,7 @@ local function user_based_domain(args)
 end
 
 -- Main dispatcher
-local function dispatch(dest)
+local function dispatch_old(dest)
     local num_dest = tonumber(dest)
     local valid_did = is_valid_did(dest)
     local upsert_caller_profile = caller_handler.upsert_caller_profile()
@@ -355,14 +300,60 @@ local function dispatch(dest)
     end
 end
 
+-- Main dispatcher
+local function dispatch(dest)
+    local num_dest = tonumber(dest)
+    local valid_did = is_valid_did(dest)
+    local upsert_caller_profile = caller_handler.upsert_caller_profile()
+    freeswitch.consoleLog("info", "[routing][dispatch] destination " .. dest .. "\n")
+
+    if valid_did then
+        return handlers.handle_did_call(args)
+
+    elseif args.days and args.days ~= "" then
+        if args.failover_destination then
+            freeswitch.consoleLog("notice",
+                "[routing.lua] Failover due to day restriction → " .. args.failover_destination)
+            session:execute("transfer", args.failover_destination .. " XML systech")
+            return true
+        else
+            session:execute("playback", "ivr/ivr-day_not_allowed.wav")
+            session:execute("hangup")
+            return false
+        end
+    end
+
+    if (num_dest and num_dest >= 1000 and num_dest <= 3999) or (user_based_domain(args)) then
+        return handlers.extension(args)
+    elseif num_dest and num_dest >= 4000 and num_dest <= 5999 then
+        return handlers.callcenter(args)
+    elseif num_dest and num_dest >= 6000 and num_dest <= 6999 then
+        return handlers.ringgroup(args)
+    elseif num_dest and num_dest >= 7000 and num_dest <= 8999 then
+        return handlers.ivr(args)
+    elseif tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
+        return handlers.outbound(args)
+    else
+        return false -- No matching route found
+    end
+end
+
+--session:execute("info") 
+
+-- destination_type = session:getVariable("destination_type") or ""
+-- destination = session:getVariable("destination") or ""
+
+freeswitch.consoleLog("info", "[routing] destination " .. did_destination .. "\n")
 -- 🚀 Execute
-local routed = dispatch(destination)
+local routed = dispatch(did_destination)
+
+
 
 if routed then
     handle_prompt_cause()
     freeswitch.consoleLog("info", "[routing.lua] Call routed successfully.\n")
 else
-    freeswitch.consoleLog("warning", "[routing.lua] No route found for: " .. destination)
+    freeswitch.consoleLog("warning", "[routing.lua] No route found for: " .. did_destination .. "\n")
     session:execute("sleep", "1000")
     session:execute("playback", "ivr/ivr-no_route_destination.wav")
 end
