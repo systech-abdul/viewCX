@@ -232,68 +232,109 @@ function find_matching_condition(node_id, domain_name, domain_uuid, ivr_menu_uui
 
     local condition_json
 
-    -- Execute query
-    dbh:query(sql, params, function(row)
+    -- Execute DB query
+    local status = dbh:query(sql, params, function(row)
         condition_json = row.key_based_actions
     end)
 
-    -- Check if data fetched
-    if not condition_json or condition_json == '' then
-        freeswitch.consoleLog("ERR", "[find_matching_condition] No conditions found for node_id " .. tostring(node_id) .. "\n")
-        return
+    -- Validate query execution
+    if not status then
+        freeswitch.consoleLog("ERR", "[find_matching_condition] SQL execution failed for node_id " .. tostring(node_id) .. "\n")
+        return nil
     end
 
+    -- Validate fetched data
+    if not condition_json or condition_json == "" or condition_json == "null" then
+        freeswitch.consoleLog("ERR", "[find_matching_condition] No key_based_actions found for node_id " .. tostring(node_id) .. "\n")
+        return nil
+    end
+
+    freeswitch.consoleLog("INFO", "[find_matching_condition] Loaded JSON: " .. condition_json .. "\n")
+    -- SQL query to fetch variable from journey table
+    local sql = [[
+        SELECT variables
+        FROM call_ivr_journeys
+        WHERE call_uuid = :uuid AND domain_uuid = :domain_uuid LIMIT 1;
+    ]]
+
+    local call_uuid = session:getVariable("call_uuid")
+    local domain_uuid = session:getVariable("domain_uuid")
+    local params = { uuid = call_uuid,
+                    domain_uuid = domain_uuid
+            }
+
+    -- 🪶 DEBUG: Print the SQL for verification
+    -- session:execute("info")
+    freeswitch.consoleLog("INFO", "session:getVariable(uuid): " .. session:getVariable("call_uuid") .. "\n")
+    freeswitch.consoleLog("INFO", "session:getVariable(domain_uuid): " .. session:getVariable("domain_uuid") .. "\n")
+
+    local variable_json = "{}"
+
+    -- Execute query
+    dbh:query(sql, params, function(row)
+        variable_json = row.variables
+    end)
+
+    -- Validate fetched data
+    if not variable_json or variable_json == "" or variable_json == "null" then
+        freeswitch.consoleLog("ERR", "[find_matching_condition] No key_based_actions found for call_uuid " .. tostring(call_uuid) .. "\n")
+        -- return nil
+    end
+
+    -- freeswitch.consoleLog("INFO", "[find_matching_condition] Loaded JSON: " .. variable_json .. "\n")
     -- Collect runtime caller/session data as JSON
-    local data = {
-        name = session:getVariable("caller_name") or "",
-        digits = session:getVariable("digits") or "",
-        destination_number = session:getVariable("destination_number") or ""
-    }
-    local data_json = json.encode(data)
+    
 
-     freeswitch.consoleLog("console", "data======="..data_json)
 
-    -- Decode JSON safely
-    local ok1, conditions = pcall(json.decode, condition_json or "[]")
-    local ok2, data_table = pcall(json.decode, data_json or "{}")
 
-    if not ok1 or not ok2 then
-        freeswitch.consoleLog("ERR", "[find_matching_condition] Invalid JSON structure\n")
-        return
+-- Decode JSON
+local key_actions = json.decode(condition_json)
+local variables = json.decode(variable_json)
+
+-- Function to check condition
+local function is_match(value, condition, expected)
+    value = tostring(value):lower()
+    expected = tostring(expected):lower()
+
+    if condition == "equal" then
+        return value == expected
+    elseif condition == "contains" then
+        return string.find(value, expected, 1, true) ~= nil
+    else
+        return false
     end
+end
 
-    -- Normalize single object to array
-    if conditions and type(conditions) == "table" and conditions.key then
-        conditions = { conditions }
-    end
+-- Main matcher
+local function get_matching_action(key_actions, variables)
+    for _, rule in ipairs(key_actions) do
+        local key = rule.key
+        local expected = rule.string
+        local condition = rule.condition
 
-    local match_action, match_destination
+        -- 1. Check if key exists
+        if variables[key] ~= nil then
+            local value = variables[key]
 
-    -- Evaluate conditions
-    for _, cond in ipairs(conditions or {}) do
-        local key = cond.key
-        local value_in_data = data_table[key]
-
-        if value_in_data ~= nil then
-            if cond.condition == "equal" and tostring(value_in_data) == tostring(cond.string) then
-                match_action = cond.action
-                match_destination = cond.destination
-                freeswitch.consoleLog("INFO", string.format(
-                    "[find_matching_condition] Matched: key=%s value=%s → destination=%s\n",
-                    key, value_in_data, cond.destination
-                ))
-                break
+            -- 2. Apply rule
+            if is_match(value, condition, expected) then
+                return rule  -- return full rule object
             end
         end
     end
 
-    -- Fallback if no match found
-    if not match_action or not match_destination then
-        match_action = "no_match"
-        match_destination = "fall_back"
-        freeswitch.consoleLog("WARNING", "[find_matching_condition] No match found, using fallback.\n")
-        return false;
-    end
+    return nil  -- nothing matched
+end
+
+-- Execute
+local matched = get_matching_action(key_actions, variables)
+
+-- Print result
+if matched then
+    freeswitch.consoleLog("INFO", "Matched Rule: " .. json.encode(matched) .. "\n")
+else
+    freeswitch.consoleLog("INFO", "No matching rule found\n")
+end
 
     -- Route using the common handler
     route_action(match_action, match_destination, domain_name, domain_uuid, ivr_menu_uuid)
@@ -307,7 +348,7 @@ end
 function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uuid)
 
     freeswitch.consoleLog("INFO", string.format("[feature_handler][route_action] : action_type=%s | target=%s | domain_name=%s | domain_uuid=%s | ivr_menu_uuid=%s \n", action_type, target, domain_name, domain_uuid, ivr_menu_uuid ))
-    
+
     if not check_session() then
         return false
     end
@@ -373,6 +414,10 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
     elseif action_type == "node" or action_type == "condition-node" then
         find_matching_condition(tonumber(target), domain_name, domain_uuid, ivr_menu_uuid)
         return
+
+    elseif action_type == "timegroup" then
+        session:setVariable("parent_ivr_id", destination)
+        timegroup(target, ivr_menu_uuid, input)
 
     elseif action_type == "backtoivr" then
          local parent = session:getVariable("parent_ivr_id")
@@ -1025,6 +1070,24 @@ function handlers.ivr(args, counter)
             return true
         end
 
+    elseif action_type == "callcenter" then
+        local parent = session:getVariable("parent_ivr_id")
+        if parent and not visited[parent] then
+            visited[parent] = true
+            args.destination = parent
+
+            args.destination = target
+            args.domain_uuid = domain_uuid
+            args.domain = domain_name
+
+            freeswitch.consoleLog("INFO ", "destination " .. destination .. "\n")
+            freeswitch.consoleLog("INFO ", "domain_uuid " .. domain_uuid .. "\n")
+            freeswitch.consoleLog("INFO ", "domain " .. domain_name .. "\n")
+
+            return handlers.callcenter(args)
+        else
+            session:execute("playback", exit_sound_path)
+        end
     elseif action_type == "backtoivr" then
         local parent = session:getVariable("parent_ivr_id")
         if parent and not visited[parent] then
@@ -1134,7 +1197,8 @@ function handlers.outbound(args)
     if not check_session() then
         return false
     end
-
+    session:setVariable("direction", "outbound")
+    session:setVariable("call_direction", "outbound")
     local domain_uuid = session:getVariable("domain_uuid")
     local dest = session:getVariable("destination_number")
     local preferred_gateway_uuid = session:getVariable("preferred_gateway_uuid")
