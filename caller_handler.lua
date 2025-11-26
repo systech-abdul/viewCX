@@ -19,6 +19,10 @@ function caller_handler.upsert_caller_profile()
     local last_xml_cdr_uuid = session:getVariable("call_uuid") or ""
     local language_code = session:getVariable("language_code") or ""
 
+    if not domain_uuid or domain_uuid == "" then
+        freeswitch.consoleLog("ERR", "[caller_profile] domain_uuid missing \n")
+        return nil
+    end
     -- IMPORTANT for language behavior:
     --   - nil or ""  => do NOT update language on conflict (as per SQL function)
     --   - non-empty  => update language on conflict
