@@ -1216,39 +1216,55 @@ end
 
 
 -- Outbound (others)
+-- Outbound handler
 function handlers.outbound(args)
     if not check_session() then
         return false
     end
+
     session:setVariable("direction", "outbound")
     session:setVariable("call_direction", "outbound")
+
     local domain_uuid = session:getVariable("domain_uuid")
     local dest = session:getVariable("destination_number")
     local preferred_gateway_uuid = session:getVariable("preferred_gateway_uuid")
 
-    freeswitch.consoleLog("info", "[handlers.outbound] Routing outbound to: " .. tostring(dest) ..
-        " | Domain UUID: " .. tostring(domain_uuid) .. "\n")
+    freeswitch.consoleLog("info",
+        string.format("[handlers.outbound] Routing outbound to: %s | Domain UUID: %s\n",
+        tostring(dest), tostring(domain_uuid)))
 
-    local route_info = nil
-    local gateway_uuid = nil
+    local gateways = {}
     local dial_number = dest
+    local route_info = nil
 
     if preferred_gateway_uuid and preferred_gateway_uuid ~= "" then
-        gateway_uuid = preferred_gateway_uuid
-        freeswitch.consoleLog("info",
-            "[handlers.outbound] Using preferred gateway UUID from session: " .. gateway_uuid .. "\n")
+        table.insert(gateways, preferred_gateway_uuid)
+        freeswitch.consoleLog("info", "[handlers.outbound] Using preferred gateway UUID: " .. preferred_gateway_uuid .. "\n")
     else
-        -- Use outbound_routes table to find matching route
         route_info = outbound_routes.dialoutmatchForoutbound_routes(dest, domain_uuid)
-
         if route_info then
-            gateway_uuid = route_info.route.gateway_uuid
             dial_number = route_info.dial_number
-            freeswitch.consoleLog("console",
-                "[handlers.outbound] Matched route: " .. route_info.route.name .. " | Gateway: " .. gateway_uuid ..
-                " | Dial number: " .. dial_number .. "\n")
+
+            -- Set DID if available
+            if route_info.did then
+                freeswitch.consoleLog("info", "[handlers.outbound] Using DID: " .. route_info.did .. "\n")
+                session:setVariable("caller_id_number", route_info.did)
+            end
+
+            local route = route_info.route
+            table.insert(gateways, route.gateway_uuid)
+            if route.alternate1_gateway_uuid and route.alternate1_gateway_uuid ~= "" then
+                table.insert(gateways, route.alternate1_gateway_uuid)
+            end
+            if route.alternate2_gateway_uuid and route.alternate2_gateway_uuid ~= "" then
+                table.insert(gateways, route.alternate2_gateway_uuid)
+            end
+
+            freeswitch.consoleLog("info",
+                string.format("[handlers.outbound] Matched route: %s | Gateways: %s | Dial number: %s\n",
+                route.name or route.id, table.concat(gateways, ","), dial_number))
         else
-            -- fallback: pick first gateway from DB
+            -- fallback
             local sql = [[
                 SELECT gateway_uuid
                 FROM v_gateways
@@ -1257,32 +1273,39 @@ function handlers.outbound(args)
                 LIMIT 1
             ]]
             local params = { domain_uuid = domain_uuid }
-
-            if debug["sql"] then
-                freeswitch.consoleLog("notice",
-                    "[handlers.outbound] SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
-            end
-
             dbh:query(sql, params, function(row)
-                gateway_uuid = row.gateway_uuid
+                if row.gateway_uuid then
+                    table.insert(gateways, row.gateway_uuid)
+                    freeswitch.consoleLog("info", "[handlers.outbound] Fallback gateway: " .. row.gateway_uuid .. "\n")
+                end
             end)
 
-            if not gateway_uuid then
-                freeswitch.consoleLog("err", "[handlers.outbound] No gateway_uuid found in DB\n")
+            if #gateways == 0 then
+                freeswitch.consoleLog("err", "[handlers.outbound] No gateways found in DB\n")
+                session:execute("playback", "ivr/ivr-no_route_destination.wav")
                 return false
             end
         end
     end
 
-    -- Bridge the call
-    local bridge_dest = "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
-                        "sofia/gateway/" .. gateway_uuid .. "/" .. dial_number
-
-    freeswitch.consoleLog("info", "[handlers.outbound] Bridging to: " .. bridge_dest .. "\n")
+    -- Bridge via multiple gateways in one call   
+    local bridge_dest_list = {}
+    for _, gw in ipairs(gateways) do
+        table.insert(bridge_dest_list, string.format("sofia/gateway/%s/%s", gw, dial_number))
+    end
+    --Implementing Failover 
+    local bridge_dest = table.concat(bridge_dest_list, "|")
+    freeswitch.consoleLog("info", "[handlers.outbound] Attempting bridge to: " .. bridge_dest .. "\n")
 
     session:execute("bridge", bridge_dest)
+   
+  
+
     return true
 end
+
+
+
 
 
 -- DID-based call dispatcher
