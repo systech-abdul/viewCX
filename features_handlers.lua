@@ -358,6 +358,18 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         session:setVariable("destination_number", target)
         voicemail_handler(target, domain_name, domain_uuid)
 
+    elseif action_type == "callcenter" then
+        session:setVariable("parent_ivr_id", ivr_menu_uuid)
+        local args = {}
+            args.destination = target
+            args.domain_uuid = domain_uuid
+            args.domain = domain_name
+
+            freeswitch.consoleLog("INFO ", "destination " .. target .. "\n")
+            freeswitch.consoleLog("INFO ", "domain_uuid " .. domain_uuid .. "\n")
+            freeswitch.consoleLog("INFO ", "domain " .. domain_name .. "\n")
+
+            return handlers.callcenter(args)
     elseif action_type == "api" then
         local encoded_payload = json.encode(lua_ivr_vars or {})
         session:setVariable("encoded_payload", encoded_payload)
@@ -1376,23 +1388,52 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
 
     -- Fetch time group info & determine if within working hours
     local sql_timegroup = [[
+        WITH tg AS (
+            SELECT 
+                *,
+                (NOW() AT TIME ZONE time_zone) AS local_ts
+            FROM time_group
+            WHERE uuid = :time_grp_uuid
+            LIMIT 1
+        ),
+        calc AS (
+            SELECT
+                tg.*,
+
+                -- Current day (sun–sat)
+                lower(to_char(local_ts, 'Dy')) AS current_day,
+
+                -- Current time as pure TIME
+                (local_ts::time) AS current_time,
+
+                -------------------------------------------------------------------
+                -- JSON time_condition evaluation → TRUE if ANY rule matches
+                -------------------------------------------------------------------
+                EXISTS (
+                    SELECT 1
+                    FROM json_array_elements(tg.time_condition::json) AS rule
+                    WHERE
+                        -- Match day (rule->'days' is array: ["sun","mon","tue"...])
+                        lower(to_char(tg.local_ts, 'Dy')) IN (
+                            SELECT lower(json_array_elements_text((rule->'days')::json))
+                        )
+
+                        -- Match time range
+                        AND (tg.local_ts::time) >= (rule->>'start_time')::time
+                        AND (tg.local_ts::time) <= (rule->>'end_time')::time
+                ) AS is_json_time_match
+            FROM tg
+        )
         SELECT 
             *,
-            trim(to_char(now() AT TIME ZONE time_zone, 'Day')) AS current_day_trimmed,
-            to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS') AS current_time,
-            trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
-                string_to_array(trim(both '{}' from working_days), ',')
-            ) AS is_today_working,
-            (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time BETWEEN working_time_start AND working_time_end AS is_time_in_range,
-            (
-                trim(to_char(now() AT TIME ZONE time_zone, 'Day')) = ANY (
-                    string_to_array(trim(both '{}' from working_days), ',')
-                )
-                AND (to_char(now() AT TIME ZONE time_zone, 'HH24:MI:SS'))::time 
-                    BETWEEN working_time_start AND working_time_end
-            ) AS is_within_working_time
-        FROM time_group
-        WHERE uuid = :time_grp_uuid
+            -------------------------------------------------------------------
+            -- FINAL RESULT (ONLY JSON BASED)
+            -------------------------------------------------------------------
+            is_json_time_match AS final_is_within_time
+
+        FROM calc
+
+
         LIMIT 1;
     ]]
 
@@ -1403,9 +1444,9 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
 
     dbh:query(sql_timegroup, params_timegroup, function(row)
         found = true
-        within_working_time = tostring(row.is_within_working_time)
+        within_working_time = tostring(row.final_is_within_time)
         freeswitch.consoleLog("info", "[timegroup] Timezone: " .. row.time_zone .. "\n")
-        freeswitch.consoleLog("info", "[timegroup] Current Day: " .. row.current_day_trimmed .. ", Time: " .. row.current_time .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] Current Day: " .. row.current_day .. ", Time: " .. row.current_time .. "\n")
         freeswitch.consoleLog("info", "[timegroup] Within working time: " .. within_working_time .. "\n")
     end)
 
