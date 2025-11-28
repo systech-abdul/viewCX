@@ -178,38 +178,44 @@ local function is_valid_did(dest)
     else
     -- Nothing usable, maybe log and hangup or go to a default IVR
     freeswitch.consoleLog("WARNING", "[routing] No destination resolved, fallback logic should run\n")
-        if tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
-            return handlers.outbound(args)
-        end
+    return false;
     end
-
 
     ------------------------------------------------------------------
     -- Handle failover condition (inactive today)
     ------------------------------------------------------------------
-    if args.active_today == "f" or args.active_today == false then
-        if args.failover_destination and args.failover_destination ~= "" then
+    if route.active_today == "f" or route.active_today == false and  route.failover_destination ~= ""   then
+        
             freeswitch.consoleLog("WARNING", "[Routing] DID inactive today (" ..
-                (args.time_zone or "local") .. "). Using failover: " ..
-                args.failover_destination .. " (" .. (args.failover_type or "unknown") .. ")\n")
+                (route.time_zone or "local") .. "). Using failover: " ..
+                route.destination_type .. " (" .. (route.destination or "unknown") .. ")\n")
 
-            -- Set variables for dialplan or next logic
-            session:setVariable("did_type", args.failover_type or "")
-            session:setVariable("did_destination", args.failover_destination or "")
-            return true -- allow Lua to continue using failover
-        else
-            freeswitch.consoleLog("WARNING", "[Routing] DID inactive today and no failover defined.\n")
+            -- Set variables for dialplan or next logsic
+            session:setVariable("did_type", route.destination_type or "")
+            session:setVariable("did_destination", route.destination or "")
+
+            if route.destination ~= ""  then
+            session:execute("transfer", route.destination .. " XML systech")
+
+             else
+            session:execute("playback", "ivr/ivr-day_not_allowed.wav")
+            session:execute("hangup")
             return false
         end
+        
+            
+            return false
+        
     end
 
     ------------------------------------------------------------------
     -- If active today → proceed normally
     ------------------------------------------------------------------
-    session:setVariable("did_type", args.destination_type or "")
-    session:setVariable("did_destination", args.destination or "")
+    session:setVariable("did_type", route.destination_type or "")
+    session:setVariable("did_destination", route.destination or "")
     freeswitch.consoleLog("info", "[Routing] Route active today, proceeding with normal DID.\n")
     return true
+    
 end
 
 -- Returns: row table (columns as strings) on success, or nil on failure.
@@ -263,64 +269,17 @@ local function user_based_domain(args)
 
 end
 
--- Main dispatcher
-local function dispatch_old(dest)
-    local num_dest = tonumber(dest)
-    local valid_did = is_valid_did(dest)
-    local upsert_caller_profile = caller_handler.upsert_caller_profile()
 
-    if valid_did then
-        return handlers.handle_did_call(args)
-
-    elseif args.days and args.days ~= "" then
-        if args.failover_destination then
-            freeswitch.consoleLog("notice",
-                "[routing.lua] Failover due to day restriction → " .. args.failover_destination)
-            session:execute("transfer", args.failover_destination .. " XML systech")
-            return true
-        else
-            session:execute("playback", "ivr/ivr-day_not_allowed.wav")
-            session:execute("hangup")
-            return false
-        end
-    end
-
-    if (num_dest and num_dest >= 1000 and num_dest <= 3999) or (user_based_domain(args)) then
-        return handlers.extension(args)
-    elseif num_dest and num_dest >= 4000 and num_dest <= 5999 then
-        return handlers.callcenter(args)
-    elseif num_dest and num_dest >= 6000 and num_dest <= 6999 then
-        return handlers.ringgroup(args)
-    elseif num_dest and num_dest >= 7000 and num_dest <= 8999 then
-        return handlers.ivr(args)
-    elseif tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
-        return handlers.outbound(args)
-    else
-        return false -- No matching route found
-    end
-end
 
 -- Main dispatcher
 local function dispatch(dest)
     local num_dest = tonumber(dest)
     local valid_did = is_valid_did(dest)
     local upsert_caller_profile = caller_handler.upsert_caller_profile()
-    freeswitch.consoleLog("info", "[routing][dispatch] destination " .. dest .. "\n")
+    freeswitch.consoleLog("info", "[routing][dispatch] destination " .. dest .."valid_did ::" ..tostring(valid_did).. "\n")
 
     if valid_did then
         return handlers.handle_did_call(args)
-
-    elseif args.days and args.days ~= "" then
-        if args.failover_destination then
-            freeswitch.consoleLog("notice",
-                "[routing.lua] Failover due to day restriction → " .. args.failover_destination)
-            session:execute("transfer", args.failover_destination .. " XML systech")
-            return true
-        else
-            session:execute("playback", "ivr/ivr-day_not_allowed.wav")
-            session:execute("hangup")
-            return false
-        end
     end
 
     if (num_dest and num_dest >= 1000 and num_dest <= 3999) or (user_based_domain(args)) then

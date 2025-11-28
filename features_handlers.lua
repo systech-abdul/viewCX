@@ -3,6 +3,7 @@ local caller_handler = require "caller_handler"
 local vm = require "custom_voicemail"
 local ai_ws = require "ai_ws"
 local outbound_routes = require "outbound_routes"
+local base64 = require "resources.functions.base64"
 
 api = freeswitch.API()
 local handlers = {}
@@ -375,7 +376,10 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
             did_ivrs(target);
         end
     elseif action_type == "callcenter" then
+
+
         session:setVariable("parent_ivr_id", ivr_menu_uuid)
+        
         local args = {}
             args.destination = target
             args.domain_uuid = domain_uuid
@@ -573,6 +577,19 @@ function handlers.callcenter(args)
 
     session:setVariable("queue_name", queue_data.queue_name or "default")
     session:setVariable("queue", queue)
+
+    --local data = "{'lang':'eng','test':'testest'}"
+    local data = session:getVariable("meta_data")
+    if data then
+        local b64 = base64.encode(data)
+
+        session:setVariable("meta_data", b64)
+        freeswitch.consoleLog("INFO", "Encoded = " .. b64 .. "\n")
+
+        local decoded = base64.decode(b64)
+        freeswitch.consoleLog("INFO", "Decoded = " .. decoded .. "\n")
+    end
+    
 
         -- Run background announcement/prompt Lua
     local queue_greeting = queue_data.queue_greeting 
@@ -1121,7 +1138,11 @@ function handlers.ivr(args, counter)
             return true
         end
 
+       -- we already have handle for callcenter  
+--[[ 
     elseif action_type == "callcenter" then
+
+        session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
         local parent = session:getVariable("parent_ivr_id")
         if parent and not visited[parent] then
             visited[parent] = true
@@ -1139,6 +1160,9 @@ function handlers.ivr(args, counter)
         else
             session:execute("playback", exit_sound_path)
         end
+ ]]
+
+
     elseif action_type == "backtoivr" then
         local parent = session:getVariable("parent_ivr_id")
         if parent and not visited[parent] then
@@ -1221,6 +1245,7 @@ function handlers.ivr(args, counter)
         
         
     elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type == "conf" then
+        session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
         session:execute("transfer", target .. " XML systech")
 
     elseif action_type == "voicemail" then
@@ -1345,10 +1370,11 @@ function handlers.handle_did_call(args)
 
     --session:execute("info");
     local log_message = "[handlers.handle_did_call] Routing args:\n"
+    freeswitch.consoleLog("info", log_message) 
    --[[  for k, v in pairs(args) do
         log_message = log_message .. string.format("  %s = %s\n", tostring(k), tostring(v))
-    end
-    freeswitch.consoleLog("info", log_message) ]]
+    end]]
+    
 
     session:setVariable("verified_did", "true")
     

@@ -21,3 +21,5 @@ function base64.decode(s)
 		return base64.dec(s);
 	end
 end
+
+return base64;
