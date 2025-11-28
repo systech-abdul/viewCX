@@ -345,7 +345,10 @@ end
 
 
 -- Reusable function to handle IVR routing actions
-function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uuid)
+function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uuid, exit_node)
+
+    -- Set default value if exit_node is nil
+    exit_node = exit_node or false
 
     freeswitch.consoleLog("INFO", string.format("[feature_handler][route_action] : action_type=%s | target=%s | domain_name=%s | domain_uuid=%s | ivr_menu_uuid=%s \n", action_type, target, domain_name, domain_uuid, ivr_menu_uuid ))
 
@@ -357,7 +360,20 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
     if action_type == "voicemail" then
         session:setVariable("destination_number", target)
         voicemail_handler(target, domain_name, domain_uuid)
+    elseif action_type == "ivr" then
 
+        local is_uuid = string.match(target, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$")
+        if is_uuid then
+            session:setVariable("parent_ivr_id", ivr_menu_uuid)
+            local args = {}
+                args.destination = target
+                args.domain_uuid = domain_uuid
+                args.domain = domain_name
+                local counter = 0
+                return handlers.ivr(args, counter)
+        else
+            did_ivrs(target);
+        end
     elseif action_type == "callcenter" then
         session:setVariable("parent_ivr_id", ivr_menu_uuid)
         local args = {}
@@ -429,7 +445,7 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
 
     elseif action_type == "timegroup" then
         session:setVariable("parent_ivr_id", destination)
-        timegroup(target, ivr_menu_uuid, input)
+        timegroup(target, ivr_menu_uuid, input,exit_node)
 
     elseif action_type == "backtoivr" then
          local parent = session:getVariable("parent_ivr_id")
@@ -1087,7 +1103,7 @@ function handlers.ivr(args, counter)
                     "INFO",
                     string.format("[IVR] Executing exit action: %s %s\n", ivr_data.ivr_menu_exit_app, ivr_data.ivr_menu_exit_data)
                 )
-                route_action(ivr_data.ivr_menu_exit_app, ivr_data.ivr_menu_exit_data, domain_name, domain_uuid, ivr_menu_uuid)
+                route_action(ivr_data.ivr_menu_exit_app, ivr_data.ivr_menu_exit_data, domain_name, domain_uuid, ivr_menu_uuid, true)
             end
             return true
         end
@@ -1338,6 +1354,7 @@ function handlers.handle_did_call(args)
     
 
     local did_type        = session:getVariable("did_type") or session:getVariable("destination_type") or ""
+    local destination     = session:getVariable("v_destination") or session:getVariable("destination") or ""
     local did_destination = session:getVariable("did_destination") or ""
     local domain_name     = session:getVariable("domain_name") or ""
     local domain_uuid     = session:getVariable("domain_uuid") or ""
@@ -1357,14 +1374,14 @@ function handlers.handle_did_call(args)
     freeswitch.consoleLog(
         "info",
         string.format(
-            "[DID] domain_name=%s, did_type=%s, did_destination=%s\n",
-            domain_name, did_type, did_destination
+            "[DID] domain_name=%s, did_type=%s, did_destination=%s, destination=%s\n",
+            domain_name, did_type, did_destination, destination or "nil"
         )
      )
   
       
      if did_type and did_type=='ivr' then
-        
+        did_destination = destination or did_destination
         did_ivrs(did_destination);
      
     else  
@@ -1376,10 +1393,13 @@ function handlers.handle_did_call(args)
 end
 
 
-function timegroup(time_grp_uuid, ivr_menu_uuid, input)
+function timegroup(time_grp_uuid, ivr_menu_uuid, input,exit_node)
     if not check_session() then
         return false
     end
+
+    -- Set default value if exit_node is nil
+    exit_node = exit_node or false
 
     local domain_name = session:getVariable("domain_name")
     local domain_uuid = session:getVariable("domain_uuid")
@@ -1440,14 +1460,24 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
     local params_timegroup = { time_grp_uuid = time_grp_uuid }
 
     local within_working_time = "false"
+    local working_destination_type, working_destination_num, failover_destination_type, failover_destination_num
     local found = false
+
 
     dbh:query(sql_timegroup, params_timegroup, function(row)
         found = true
         within_working_time = tostring(row.final_is_within_time)
-        freeswitch.consoleLog("info", "[timegroup] Timezone: " .. row.time_zone .. "\n")
-        freeswitch.consoleLog("info", "[timegroup] Current Day: " .. row.current_day .. ", Time: " .. row.current_time .. "\n")
-        freeswitch.consoleLog("info", "[timegroup] Within working time: " .. within_working_time .. "\n")
+        working_destination_type = row.working_destination_type
+        working_destination_num = row.working_destination_num
+        failover_destination_type = row.failover_destination_type
+        failover_destination_num = row.failover_destination_num
+
+        freeswitch.consoleLog("info", "[timegroup] Timezone : " .. row.time_zone .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] Current Day : " .. row.current_day .. ", Time: " .. row.current_time .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] Within working time : " .. within_working_time .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] working_destination_type : " .. row.working_destination_type .. ", num : " .. row.working_destination_num .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] failover_destination_type : " .. row.failover_destination_type .. ", num : " .. row.failover_destination_num .. "\n")
+        freeswitch.consoleLog("info", "[timegroup] is exit_action : " .. tostring(exit_node) .. "\n")
     end)
 
     if not found then
@@ -1459,23 +1489,39 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input)
     -- Store session variable
     local is_working = within_working_time == "t" or within_working_time == "true"
     session:setVariable("timegroup_working", is_working and "true" or "false")
-
-    -- Fetch IVR destination info
-    local ivr_data = get_ivr_type_and_destination(ivr_menu_uuid, input)
-    if not ivr_data then
-        return false
-    end
-
-    -- Determine routing based on time group result
     local destination_type, destination_number, routing_note
-    if is_working then
-        destination_type = ivr_data.working_destination_type
-        destination_number = ivr_data.working_destination_num
-        routing_note = "working timegroup routing"
+
+    if( exit_node ) then
+        freeswitch.consoleLog("info", "[timegroup] Exiting configuration.\n")
+        local exit_action = action_type or "unknown"
+
+        -- Determine routing based on time group result
+        if is_working then
+            destination_type = working_destination_type
+            destination_number = working_destination_num
+            routing_note = "exit working timegroup routing"
+        else
+            destination_type = failover_destination_type
+            destination_number = failover_destination_num
+            routing_note = "exit failover timegroup routing"
+        end
     else
-        destination_type = ivr_data.failover_destination_type
-        destination_number = ivr_data.failover_destination_num
-        routing_note = "failover timegroup routing"
+        -- Fetch IVR destination info
+        local ivr_data = get_ivr_type_and_destination(ivr_menu_uuid, input)
+        if not ivr_data then
+            return false
+        end
+
+        -- Determine routing based on time group result
+        if is_working then
+            destination_type = ivr_data.working_destination_type
+            destination_number = ivr_data.working_destination_num
+            routing_note = "working timegroup routing"
+        else
+            destination_type = ivr_data.failover_destination_type
+            destination_number = ivr_data.failover_destination_num
+            routing_note = "failover timegroup routing"
+        end
     end
 
     freeswitch.consoleLog("info", string.format("[timegroup] Routing to: %s - %s\n", tostring(destination_type), tostring(destination_number)))
