@@ -2,6 +2,7 @@ local handlers = require "features_handlers"
 local caller_handler = require "caller_handler"
 local Database = require "resources.functions.database"
 local json = require("resources.functions.lunajson")
+local outbound_routes = require "outbound_routes"
 
 local dbh = Database.new("system")
 assert(dbh:connected())
@@ -275,14 +276,22 @@ end
 local function dispatch(dest)
     local num_dest = tonumber(dest)
     local valid_did = is_valid_did(dest)
-    local upsert_caller_profile = caller_handler.upsert_caller_profile()
-    freeswitch.consoleLog("info", "[routing][dispatch] destination " .. dest .."valid_did ::" ..tostring(valid_did).. "\n")
+    local domain_uuid = session:getVariable("domain_uuid")
 
     if valid_did then
         return handlers.handle_did_call(args)
     end
 
-    if (num_dest and num_dest >= 1000 and num_dest <= 3999) or (user_based_domain(args)) then
+    -- Compute outbound routing only ONCE
+    local route_info = outbound_routes.dialoutmatchForoutbound_routes(dest, domain_uuid)
+
+    -- If outbound route matched → handle outbound
+    if route_info then
+        return handlers.outbound(args, route_info)
+    end
+
+    -- Local extension ranges
+    if (num_dest and num_dest >= 1000 and num_dest <= 3999) or user_based_domain(args) then
         return handlers.extension(args)
     elseif num_dest and num_dest >= 4000 and num_dest <= 5999 then
         return handlers.callcenter(args)
@@ -290,12 +299,15 @@ local function dispatch(dest)
         return handlers.ringgroup(args)
     elseif num_dest and num_dest >= 7000 and num_dest <= 8999 then
         return handlers.ivr(args)
-    elseif tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
-        return handlers.outbound(args)
-    else
-        return false -- No matching route found
+        
+   --[[  elseif tostring(dest):len() >= 7 and tostring(dest):len() <= 15 then
+        -- fallback outbound (no route matched)
+        return handlers.outbound(args, nil) ]]
     end
+
+    return false -- No match
 end
+
 
 --session:execute("info") 
 
