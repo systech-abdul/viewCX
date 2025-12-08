@@ -582,6 +582,32 @@ function handlers.callcenter(args)
     end
 
     session:setVariable("queue_name", queue_data.queue_name or "default")
+
+    
+    --local src = session:getVariable("ani")
+
+     -- VIP logic
+       -- Fetch priority from queue_data
+    local priority = tonumber(queue_data.priority) or 10
+    local cc_base_score
+
+    freeswitch.consoleLog("console", "[CallCenter] priority = " .. priority .. "\n")
+    if priority >= 1 and priority <= 9 then
+    cc_base_score = 1100 - (priority * 100)
+    elseif priority == 10 then
+    cc_base_score = 0
+    else
+    cc_base_score = 0  -- fallback for invalid priorities
+    end
+
+    if cc_base_score ~= 0 then
+    session:setVariable("cc_base_score", tostring(cc_base_score))
+    end
+    
+    --session:execute("info")
+   
+   
+
     session:setVariable("queue", queue)
 
     --local data = "{'lang':'eng','test':'testest'}"
