@@ -250,7 +250,7 @@ function find_matching_condition(node_id, domain_name, domain_uuid, ivr_menu_uui
         return nil
     end
 
-    freeswitch.consoleLog("INFO", "[find_matching_condition] Loaded JSON: " .. condition_json .. "\n")
+    freeswitch.consoleLog("console", "[find_matching_condition] Loaded JSON: " .. condition_json .. "\n")
     -- SQL query to fetch variable from journey table
     local sql = [[
         SELECT variables
@@ -266,6 +266,7 @@ function find_matching_condition(node_id, domain_name, domain_uuid, ivr_menu_uui
 
     -- 🪶 DEBUG: Print the SQL for verification
     -- session:execute("info")
+
     freeswitch.consoleLog("INFO", "session:getVariable(uuid): " .. session:getVariable("call_uuid") .. "\n")
     freeswitch.consoleLog("INFO", "session:getVariable(domain_uuid): " .. session:getVariable("domain_uuid") .. "\n")
 
@@ -333,12 +334,17 @@ local matched = get_matching_action(key_actions, variables)
 -- Print result
 if matched then
     freeswitch.consoleLog("INFO", "Matched Rule: " .. json.encode(matched) .. "\n")
+     -- Extract action & destination from matched rule
+    local match_action = matched.action
+    local match_destination = matched.destination
+   
+    route_action(match_action, match_destination, domain_name, domain_uuid, ivr_menu_uuid)
+
 else
     freeswitch.consoleLog("INFO", "No matching rule found\n")
 end
 
-    -- Route using the common handler
-    route_action(match_action, match_destination, domain_name, domain_uuid, ivr_menu_uuid)
+   
 end
 
 
@@ -961,21 +967,6 @@ function handlers.ivr(args, counter)
 
     --  Build digit regex safely
     local digit_regex = "[0-9]"
-   --[[  if keys and #keys > 0 then
-        local safe_keys = {}
-        for _, k in ipairs(keys) do
-            if k and k ~= "" then
-                local clean = k:gsub("[^%w%*#]", "")
-                if clean ~= "" then table.insert(safe_keys, clean) end
-            end
-        end
-        digit_regex = (#safe_keys > 0) and "[" .. table.concat(safe_keys, "") .. "]" or "\\d"
-    else
-        freeswitch.consoleLog("WARNING", "[IVR] No keys found, using fallback regex \\d\n")
-        digit_regex = "\\d"
-    end
-
-    freeswitch.consoleLog("INFO", "[IVR] Using digit regex: " .. tostring(digit_regex) .. "\n") ]]
 
     local key_action_list = {}
     for i = 1, #keys do
@@ -1085,6 +1076,8 @@ function handlers.ivr(args, counter)
         })
     end
 
+
+    --freeswitch.consoleLog("console","parent_variable   " ..parent_variable);
     -- Save IVR journey
     dbh:query([[
         INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, variables, updated_at)

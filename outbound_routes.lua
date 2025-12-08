@@ -120,9 +120,9 @@ local function dialoutmatchForoutbound_routes(number, domain_uuid)
             -----------------------------------------------------
             -- STEP 1 — Apply allowed_prefix BEFORE strip
             -- Example:
-            --   number = 918860294089
+            --   number = 91XXXXXXXXXX
             --   prefix = ++
-            --   final_before_strip = ++918860294089
+            --   final_before_strip = ++91XXXXXXXXXX
             -----------------------------------------------------
             local dial_number = number
 
@@ -133,7 +133,7 @@ local function dialoutmatchForoutbound_routes(number, domain_uuid)
             -----------------------------------------------------
             -- STEP 2 — Apply strip to FINAL STRING (prefix included)
             -- strip = 1 → remove 1 char from LEFT:
-            --   ++918860294089 → +918860294089
+            --   ++91XXXXXXXXXX → +91XXXXXXXXXX
             -----------------------------------------------------
             if route.strip and tonumber(route.strip) > 0 then
                 local s = tonumber(route.strip)
