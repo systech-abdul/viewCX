@@ -419,6 +419,74 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
             end
         end
 
+    elseif action_type == "aiagent" then
+        
+            ------------------------------------------------------------------
+            -- SQL Query
+            ------------------------------------------------------------------
+            local sql = [[
+                SELECT *
+                FROM ai_agent
+                WHERE domain_uuid = :domain_uuid
+                AND id = :id
+                LIMIT 1
+            ]]
+        
+            local params = {
+                domain_uuid = domain_uuid,
+                id = target
+            }
+        
+            if debug["sql"] then
+                local json = require "resources.functions.lunajson"
+                freeswitch.consoleLog("notice",
+                    "[handlers.aiagent] SQL: " .. sql ..
+                    " | Params: " .. json.encode(params) .. "\n")
+            end
+        
+            local ai = {}
+            local found = false
+        
+            dbh:query(sql, params, function(row)
+                found = true
+                ai.tenant_id     = row.tenant_id
+                ai.process_id      = row.process_id
+                ai.metadata      = row.metadata
+            end)
+        
+            if not found then
+                freeswitch.consoleLog("err",
+                    "[ivr.aiagent] No AI agent found: id=" .. tostring(target) ..
+                    " domain=" .. tostring(domain_uuid) .. "\n")
+                return
+            end
+        
+        
+            session:setVariable("domain_name", domain_name)
+            if ai.tenant_id     then session:setVariable("tenant_id",    ai.tenant_id) end
+            if ai.process_id     then session:setVariable("process_id",     ai.process_id) end
+        
+            freeswitch.consoleLog("info","[ivr.aiagent] Provider Info " .. json.encode(ai.metadata) .."\n")
+            freeswitch.consoleLog("info","[ivr.aiagent] Loaded AI Agent ID " .. target .."\n")
+        
+            -- local config = {
+            --     ai_provider = "deepgram-convai",
+            --     deepgram_api_key = "71cd12a454001b8a12baeeec5543d12b0f5278b6", -- Optional, if not set in ENV
+            --     listen_model = "nova-3",
+            --     speak_model = "aura-2-thalia-en",
+            --     system_prompt = "You are a helpful banking assistant.",
+            --     first_message = "Hello, how can I help you with your bank account?",
+            --     greeting = "Hello, how can I help you?" -- Text sent to TTS usually
+            -- }
+
+            -- local config = {
+            --     ai_provider = "elevenlabs-convai",
+            --     elevenlabs_api_key = "sk_193ac27dae58c1d1b6044dc037104a727157b08aa1111252",
+            --     elevenlabs_agent_id = "agent_6701kawy7n7nevwvzvw6efjbycdy"
+            -- }
+            local config = ai.metadata;
+            ai_ws.run_ai_engine(session,config)
+            return
     elseif action_type == "hangup" then
         session:execute("hangup")
 
@@ -444,9 +512,9 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         end
 
     elseif action_type == "lua" then
-        ai_ws.run_ai_engine(session)
-        return
-        -- session:execute("lua", target)
+        -- ai_ws.run_ai_engine(session)
+        -- return
+        session:execute("lua", target)
 
 
     elseif action_type == "node" or action_type == "condition-node" then
@@ -1285,7 +1353,7 @@ function handlers.ivr(args, counter)
                 found = true
                 ai.tenant_id     = row.tenant_id
                 ai.process_id      = row.process_id
-            
+                ai.metadata      = row.metadata
             end)
         
             if not found then
@@ -1299,11 +1367,20 @@ function handlers.ivr(args, counter)
             session:setVariable("domain_name", domain_name)
             if ai.tenant_id     then session:setVariable("tenant_id",    ai.tenant_id) end
             if ai.process_id     then session:setVariable("process_id",     ai.process_id) end
-        
+            freeswitch.consoleLog("info","[ivr.aiagent] Provider Info " .. json.encode(ai.metadata) .."\n")
             freeswitch.consoleLog("info","[ivr.aiagent] Loaded AI Agent ID " .. target .."\n")
         
-        
-            ai_ws.run_ai_engine(session)
+            -- local config = {
+            --     ai_provider = "deepgram-convai",
+            --     deepgram_api_key = "71cd12a454001b8a12baeeec5543d12b0f5278b6", -- Optional, if not set in ENV
+            --     listen_model = "nova-3",
+            --     speak_model = "aura-2-thalia-en",
+            --     system_prompt = "You are a helpful banking assistant.",
+            --     first_message = "Hello, how can I help you with your bank account?",
+            --     greeting = "Hello, how can I help you?" -- Text sent to TTS usually
+            -- }
+            local config = ai.metadata;
+            ai_ws.run_ai_engine(session,config)
             return
         
         
@@ -1320,6 +1397,8 @@ function handlers.ivr(args, counter)
         session:setVariable("ivr_menu_uuid", ivr_menu_uuid)
         session:execute("lua", "api_handler.lua")
 
+    elseif action_type == "hangup" then
+        session:execute("hangup")
     else
         session:execute("playback", exit_sound_path)
     end
