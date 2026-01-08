@@ -581,24 +581,68 @@ end
 
 
 -- Extension (1000–3999)
+
 function handlers.extension(args)
     if not check_session() then
         return false
     end
 
-    freeswitch.consoleLog("info", "[handlers.extension] Routing to extension: " .. tostring(args.destination) .. "\n")
+    local kam_ip = session:getVariable("sip_h_X-Kamailio-Source")
 
-    -- Set codec preferences
+    freeswitch.consoleLog("INFO",
+        "[handlers.extension] Routing to extension: " .. tostring(args.destination) .. "\n"
+    )
+
+    -- Codec preferences
     local codec_string = session:getVariable("global_codec_prefs")
+    if codec_string then
+        session:setVariable("codec_string", codec_string)
+    end
 
-    session:setVariable("codec_string", codec_string)
+    -- Call behavior
+    session:setVariable("hangup_after_bridge", "true")
+    session:setVariable("continue_on_fail", "true")
 
-    local dest = "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}user/" .. args.destination .. "@" ..
-                     args.domain
-    session:execute("bridge", dest)
+    -- ---------- Kamailio path ----------
+    if kam_ip then
+
+        freeswitch.consoleLog("INFO","[handlers.extension]  Kamailio-Source  (kam_ip): " .. tostring(kam_ip) .. "\n" )
+       
+        
+        if session:ready() then
+          
+
+        --  Try WebRTC over TLS (7443)
+        local webrtc_cmd =
+            "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+            "sofia/internal/" .. args.destination .. "@" .. kam_ip ..":7443".. ";transport=tls"
+
+        session:execute("bridge", webrtc_cmd)
+
+       --   normal SIP 
+        local sip_cmd =
+                "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+                "sofia/internal/" .. args.destination .. "@" .. kam_ip ..":5070"
+
+            session:execute("bridge", sip_cmd)
+
+
+        
+        end
+
+        return true
+    end
+
+    -- ---------- Local user path ----------
+    local user_cmd =
+        "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+        "user/" .. args.destination .. "@" .. args.domain
+
+    session:execute("bridge", user_cmd)
 
     return true
 end
+
 
 -- Call Center (4000–4999)
 
