@@ -612,10 +612,10 @@ function handlers.extension(args)
         if session:ready() then
           
 
-        --  Try WebRTC over TLS (7443)
+        --  Try WebRTC over TLS (8443)
         local webrtc_cmd =
             "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
-            "sofia/internal/" .. args.destination .. "@" .. kam_ip ..":7443".. ";transport=tls"
+            "sofia/internal/" .. args.destination .. "@" .. kam_ip ..":8443".. ";transport=tls"
 
         session:execute("bridge", webrtc_cmd)
 
