@@ -54,9 +54,19 @@ if not session:ready() or not did_destination or did_destination == "" then
     return
 end
 
-freeswitch.consoleLog("info",
-    string.format("[routing.lua] Dialed: %s | Domain: %s\n", destination, domain_name or "unknown"))
+local refer_to = session:getVariable("sip_refer_to")
+local refer_domain = nil
+local refer_extension = nil
+if refer_to then
+    refer_domain = refer_to:match("@([^%]]+)")
+    refer_extension = refer_to:match(":([^@]+)@")
+    session:setVariable("refer_domain", refer_domain)
+    session:setVariable("refer_extension", refer_extension)
+end
 
+freeswitch.consoleLog("info",
+    string.format("[routing.lua] Dialed: %s | Domain: %s\n", destination or refer_extension, domain_name or refer_domain or "unknown"))
+session:execute("info") -- Debug info
 -- Fetch domain_uuid
 local function get_domain_uuid(name)
     local sql = "SELECT domain_uuid FROM v_domains WHERE domain_name = :domain_name"
@@ -71,7 +81,7 @@ end
 
 local domain_uuid = session:getVariable("domain_uuid") 
 if not domain_uuid or domain_uuid == "" then
-    domain_uuid = get_domain_uuid(domain_name)
+    domain_uuid = get_domain_uuid(domain_name or refer_domain or "")
     session:setVariable("domain_uuid", domain_uuid)
 end
 

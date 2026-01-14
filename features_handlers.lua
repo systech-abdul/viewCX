@@ -660,9 +660,11 @@ function handlers.callcenter(args)
     end
 
     local uuid = session:get_uuid()
-    local queue_extension = args.destination
+    local queue_extension = args.destination or session:getVariable("refer_extension")
     local domain_uuid = args.domain_uuid
-    local queue = queue_extension .. "@" .. args.domain
+    local domain_name = args.domain or session:getVariable("refer_domain")
+    local queue = queue_extension .. "@" .. domain_name
+    freeswitch.consoleLog("info", "[CallCenter] Joining queue: " .. queue .. "\n")
 
     -- Query the database for queue info
     local queue_data = nil
@@ -1270,7 +1272,7 @@ function handlers.ivr(args, counter)
         end
 
        -- we already have handle for callcenter  
---[[ 
+
     elseif action_type == "callcenter" then
 
         session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
@@ -1291,7 +1293,7 @@ function handlers.ivr(args, counter)
         else
             session:execute("playback", exit_sound_path)
         end
- ]]
+
 
 
     elseif action_type == "backtoivr" then
