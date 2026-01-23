@@ -119,6 +119,7 @@ debug["xml_string"] =true;
 					queue_announce_sound = row.queue_announce_sound;
 					queue_announce_frequency = row.queue_announce_frequency;
 					queue_description = row.queue_description;
+					
 
 				--replace the space with a dash
 					queue_name = queue_name:gsub(" ", "-");
@@ -224,6 +225,8 @@ debug["xml_string"] =true;
 					agent_reject_delay_time = row.agent_reject_delay_time;
 					agent_busy_delay_time = row.agent_busy_delay_time;
 					agent_record = row.agent_record;
+					extension = row.extension;
+					
 
 				--get and then set the complete agent_contact with the call_timeout and when necessary confirm
 						--confirm = "group_confirm_file=custom/press_1_to_accept_this_call.wav,group_confirm_key=1";
@@ -235,7 +238,40 @@ debug["xml_string"] =true;
 						end
 
 						
-
+						 
+						local kamailio_domain = nil
+						local with_kamailio = false
+						-- Build SQL
+						local sql = "SELECT kamailio_domain "
+						sql = sql .. "FROM call_app_settings "
+						sql = sql .. "WHERE kamailio_enable = TRUE "
+						sql = sql .. "AND domain_uuid = '" .. domain_uuid .. "' "
+						sql = sql .. "LIMIT 1; "
+						if debug["sql"] then
+						    freeswitch.consoleLog("notice", "[xml_handler] SQL: " .. sql .. "\n")
+						end
+						-- Execute SQL
+						dbh:query(sql, function(row)
+							
+						    kamailio_domain = row.kamailio_domain
+						    with_kamailio = true
+						end)
+						-- Build agent_contact only when Kamailio is enabled
+						if with_kamailio and kamailio_domain then
+						    agent_contact =
+						        "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+						        "sofia/internal/" .. extension .. "@" .. kamailio_domain .. ";transport=tls"
+						end
+						-- Debug log
+						freeswitch.consoleLog(
+						    "debug",
+						    string.format(
+						        "[xml_handler] with_kamailio=%s kamailio_domain=%s agent_contact=%s\n",
+						        tostring(with_kamailio),
+						        tostring(kamailio_domain),
+						        tostring(agent_contact)
+						    )
+						)
 					
 						if (string.find(agent_contact, '}') == nil) then
 							--not found
@@ -292,6 +328,10 @@ debug["xml_string"] =true;
 					agent_contact = string.gsub(agent_contact, "{strftime", "${strftime");
 					agent_contact = string.gsub(agent_contact, "{uuid}", "${uuid}");
 					agent_contact = string.gsub(agent_contact, "{record_ext}", "${record_ext}");
+                  
+				  
+					
+
 
 				--build the xml string
 					xml:append([[                            <agent ]]);
