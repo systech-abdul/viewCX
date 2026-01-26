@@ -143,18 +143,49 @@ end
 -- 🎤 Generate TTS audio file dynamically with optional params
 -- ============================================================
 
--- Generate TTS file (or fetch from cache)
-function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocoder, tts_denoiser, tts_ssml)
-    tts_text     = tts_text     or "Hello, this is a test message."
-    tts_server   = tts_server   or "http://localhost:5500"
-    tts_voice    = tts_voice    or "espeak:en-029"
-    tts_lang     = tts_lang     or "en"
-    tts_vocoder  = tts_vocoder  or "high"
-    tts_denoiser = tts_denoiser or "0.005"
-    tts_ssml     = tts_ssml     or "true"
+function generate_tts_file(tts_text, domain_uuid)
+   
 
-    -- Helper: URL encode
-    local function urlencode(str)
+    --  Default TTS configuration
+    local tts_config = {
+        tts_text     = tts_text or "Hello, this is a test message.",
+        tts_server   = "http://localhost:5500",
+        tts_voice    = "espeak:en-029",
+        tts_lang     = "en",
+        tts_vocoder  = "high",
+        tts_denoiser = "0.005",
+        tts_ssml     = "true"
+    }
+
+    -- Fetch settings from call_app_settings table
+    local sql = [[
+        SELECT tts_setting
+        FROM call_app_settings
+        WHERE domain_uuid = :domain_uuid
+          AND deleted_at IS NULL
+        LIMIT 1
+    ]]
+
+    local params = { domain_uuid = domain_uuid }
+    local row, err = dbh:first_row(sql, params)
+
+    if err then
+        freeswitch.consoleLog("ERR", "[TTS] SQL Error: " .. tostring(err) .. "\n")
+    elseif row and row.tts_setting then
+        local decoded = json.decode(row.tts_setting)
+        if decoded then
+            for k, v in pairs(decoded) do
+                if tts_config[k] ~= nil then
+                    tts_config[k] = v
+                end
+            end
+        end
+    end
+
+    -- Debug final config
+    freeswitch.consoleLog("INFO", "[TTS] Using config: " .. json.encode(tts_config) .. "\n")
+
+  local function urlencode(str)
         if str then
             str = string.gsub(str, "\n", "%%0A")
             str = string.gsub(str, "([^%w%-_%.%~])", function(c)
@@ -180,15 +211,16 @@ function generate_tts_file(tts_text, tts_server, tts_voice, tts_lang, tts_vocode
 
     -- Build TTS request URL
     local tts_url = string.format(
-        "%s/api/tts?voice=%s&lang=%s&vocoder=%s&denoiserStrength=%s&ssml=%s&text=%s&cache=true",
-        tts_server,
-        urlencode(tts_voice),
-        urlencode(tts_lang),
-        urlencode(tts_vocoder),
-        urlencode(tts_denoiser),
-        urlencode(tts_ssml),
-        urlencode(tts_text)
-    )
+    "%s/api/tts?voice=%s&lang=%s&vocoder=%s&denoiserStrength=%s&ssml=%s&text=%s&cache=true",
+    tts_config.tts_server,
+    urlencode(tts_config.tts_voice),
+    urlencode(tts_config.tts_lang),
+    urlencode(tts_config.tts_vocoder),
+    urlencode(tts_config.tts_denoiser),
+    urlencode(tts_config.tts_ssml),
+    urlencode(tts_config.tts_text)
+ )
+
 
     freeswitch.consoleLog("INFO", "[TTS] Fetching new TTS: " .. tts_url .. "\n")
 
@@ -970,7 +1002,9 @@ function handlers.ivr(args, counter)
             m.playback_text,
             m.playback_text_short,
             m.ivr_menu_exit_app,
-            m.ivr_menu_exit_data
+            m.ivr_menu_exit_data,
+            m.information_node 
+
 
         FROM v_ivr_menus m
         LEFT JOIN v_ivr_menu_options op ON m.ivr_menu_uuid = op.ivr_menu_uuid
@@ -1054,9 +1088,7 @@ function handlers.ivr(args, counter)
 
         freeswitch.consoleLog("INFO", "[IVR] Generating TTS for text: " .. tts_text .. "\n")
 
-        local tts_file = generate_tts_file(
-            tts_text, "http://localhost:5500", "coqui-tts:en_ljspeech", "en", "high", "0.005", "true", "true"
-        )
+        local tts_file = generate_tts_file(tts_text, domain_uuid)
 
         if tts_file and tts_file ~= "" then
             greet_long_path = tts_file
@@ -1075,9 +1107,7 @@ function handlers.ivr(args, counter)
 
         freeswitch.consoleLog("INFO", "[IVR] Generating TTS for text: " .. tts_text .. "\n")
 
-        local tts_file = generate_tts_file(
-            tts_text, "http://localhost:5500", "coqui-tts:en_ljspeech", "en", "high", "0.005", "true", "true"
-        )
+        local tts_file =  generate_tts_file(tts_text, domain_uuid)
 
         if tts_file and tts_file ~= "" then
             greet_short_path = tts_file
@@ -1101,7 +1131,14 @@ function handlers.ivr(args, counter)
     local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
     local ivr_menu_exit_app = ivr_data.ivr_menu_exit_app
     local ivr_menu_exit_data = ivr_data.ivr_menu_exit_data
+    local information_node = ivr_data.information_node 
 
+    
+    if information_node == 't' then
+    session:setVariable("call_result", "SUCCESS")
+    --session:setVariable("export_vars", "call_result,information_node")
+    end
+    
     local keys = split(ivr_data.option_key or "", ",")
     local actions = split(ivr_data.actions or "", ",")
 
@@ -1561,7 +1598,8 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input,exit_node)
 
     -- Set default value if exit_node is nil
     exit_node = exit_node or false
-
+    
+    session:setVariable("current_application_data", "timegroup")
     local domain_name = session:getVariable("domain_name")
     local domain_uuid = session:getVariable("domain_uuid")
 
@@ -1682,6 +1720,8 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input,exit_node)
             destination_type = ivr_data.failover_destination_type
             destination_number = ivr_data.failover_destination_num
             routing_note = "failover timegroup routing"
+            session:setVariable("call_result", "NON_WORKING_HOUR")
+            
         end
     end
 
