@@ -729,6 +729,13 @@ function handlers.callcenter(args)
 
     session:setVariable("queue_name", queue_data.queue_name or "default")
 
+
+    local direction = session:getVariable("direction") or "inbound"
+    
+    -- Call the recording function
+    enable_recording_if_needed(direction)
+    freeswitch.consoleLog("INFO", "Record File = " .. session:getVariable("record_path") .. "\n")
+    -- session:execute("info")
     
     --local src = session:getVariable("ani")
 
