@@ -13,6 +13,102 @@ debug["sql"] = false;
 session:setVariable("continue_on_fail", "3,17,18,19,20,27,USER_NOT_REGISTERED")
 session:setVariable("hangup_after_bridge", "true")
 
+
+-- =========================
+-- get_extension_uuid helpers
+-- =========================
+
+local function get_extension_uuid(domain_uuid, user)
+    local sql = [[
+        SELECT extension_uuid
+        FROM v_extensions
+        WHERE domain_uuid = :domain_uuid
+          AND enabled = 'true'
+          AND (extension = :user OR number_alias = :user)
+        LIMIT 1
+    ]]
+    local ext_uuid
+    dbh:query(sql, { domain_uuid = domain_uuid, user = user }, function(row)
+        ext_uuid = row.extension_uuid
+    end)
+    return ext_uuid
+end
+
+-- =========================
+-- Recording helpers
+-- =========================
+local function mkdir_p(path)
+    -- create nested dirs if not present
+    os.execute("mkdir -p " .. path)
+end
+
+local function build_record_path_in(domain, uuid, ext)
+    ext = ext or "wav"
+    local dir = string.format("/var/lib/freeswitch/recordings/%s/archive/%s/%s/%s",
+        domain, os.date("%Y"), os.date("%b"), os.date("%d")
+    )
+    mkdir_p(dir)
+    return dir -- .. "/" .. uuid .. "." .. ext
+end
+local function build_record_path_out(domain, uuid, ext)
+    ext = ext or "wav"
+    local dir = string.format("/var/lib/freeswitch/recordings/%s/archive/%s/%s/%s",
+        domain, os.date("%Y"), os.date("%b"), os.date("%d")
+    )
+    mkdir_p(dir)
+    return dir .. "/" .. uuid .. "." .. ext
+end
+function enable_recording_if_needed(call_type)
+    -- Only record outbound here (you can expand later if needed)
+    -- if call_type ~= "outbound" then return end
+
+    -- Optional feature flag: allow disabling per call
+    -- (set this variable elsewhere if you want to skip recording)
+    local disabled = session:getVariable("recording_disabled")
+    if disabled == "true" or disabled == "1" then
+        freeswitch.consoleLog("INFO", "[recording] recording_disabled=true, skipping\n")
+        return
+    end
+
+    local domain = session:getVariable("domain_name") or "default"
+    local uuid   = session:getVariable("uuid")
+    local rec_ext = session:getVariable("record_ext") or "wav"
+    local filename = session:getVariable("record_name") or uuid .. "." .. rec_ext ;
+    -- Create dirs + build file
+    localrecfile = ""
+
+    -- Recommended vars
+    session:setVariable("RECORD_STEREO", "true")
+    session:setVariable("recording_follow_transfer", "true")
+
+    -- Start on answer (avoids ringing)
+    
+
+    -- Helpful for debugging / CDR
+    
+    if call_type == "inbound" then
+        recfile = build_record_path_in(domain, uuid, rec_ext)
+        -- To this:
+        session:setVariable("record_path", recfile)
+        session:setVariable("record_name", filename)
+    -- Set variables as 'sticky' so they survive the bridge to the agent
+        session:execute("bridge_export", "record_path=" .. recfile)
+        session:execute("bridge_export", "record_name=" .. filename)
+    else
+        recfile = build_record_path_out(domain, uuid, rec_ext)
+        session:setVariable("execute_on_answer", "record_session::" .. recfile)
+    end
+
+    -- session:execute("set", "sticky:record_path=" .. recfile)
+    -- session:execute("set", "sticky:record_name=" .. filename)
+
+    -- -- Export them to the B-leg (Agent) as well
+    -- session:execute("export", "sticky:record_path=" .. recfile)
+    -- session:execute("export", "sticky:record_name=" .. filename)
+
+    freeswitch.consoleLog("NOTICE", "[recording] execute_on_answer=record_session::" .. recfile .. "\n")
+end
+
 -- Session variables
 local did_destination = session:getVariable("destination_number") or session:getVariable("sip_req_user") or
                         session:getVariable("sip_to_user")
@@ -66,7 +162,7 @@ end
 
 freeswitch.consoleLog("info",
     string.format("[routing.lua] Dialed: %s | Domain: %s\n", destination or refer_extension, domain_name or refer_domain or "unknown"))
-session:execute("info") -- Debug info
+-- session:execute("info") -- Debug info
 -- Fetch domain_uuid
 local function get_domain_uuid(name)
     local sql = "SELECT domain_uuid FROM v_domains WHERE domain_name = :domain_name"
@@ -83,6 +179,27 @@ local domain_uuid = session:getVariable("domain_uuid")
 if not domain_uuid or domain_uuid == "" then
     domain_uuid = get_domain_uuid(domain_name or refer_domain or "")
     session:setVariable("domain_uuid", domain_uuid)
+end
+
+-- =========================
+-- Ensure extension_uuid is set for CDR (especially outbound via custom routing.lua)
+-- =========================
+local src_user = session:getVariable("sip_from_user") or session:getVariable("caller_id_number")
+
+if src_user and domain_uuid then
+    local ext_uuid = session:getVariable("extension_uuid")
+    if not ext_uuid or ext_uuid == "" then
+        ext_uuid = get_extension_uuid(domain_uuid, src_user)
+        if ext_uuid and ext_uuid ~= "" then
+            session:setVariable("extension_uuid", ext_uuid)
+            -- optional but useful for reporting:
+            session:setVariable("accountcode", src_user)
+            session:setVariable("extension", src_user)
+            freeswitch.consoleLog("NOTICE", "[routing.lua] extension_uuid set to " .. ext_uuid .. " for user=" .. src_user .. "\n")
+        else
+            freeswitch.consoleLog("WARNING", "[routing.lua] Could not resolve extension_uuid for user=" .. tostring(src_user) .. "\n")
+        end
+    end
 end
 
 -- session:execute("info") 
@@ -288,6 +405,12 @@ local function dispatch(dest)
     local valid_did = is_valid_did(dest)
     local domain_uuid = session:getVariable("domain_uuid")
 
+    freeswitch.consoleLog("info", "[routing] call direction " .. tostring(session:getVariable("call_direction")) .. "\n")
+
+    if (session:getVariable("call_direction") == nil) then
+        session:setVariable("call_direction", "inbound")
+    end
+
     if valid_did then
         return handlers.handle_did_call(args)
     end
@@ -297,7 +420,28 @@ local function dispatch(dest)
 
     -- If outbound route matched → handle outbound
     if route_info then
+        freeswitch.consoleLog("info", "[routing] Outbound route matched, proceeding with outbound call.\n")
+            -- set CDR-friendly fields before outbound bridge
+        local dialed = did_destination or session:getVariable("destination_number") or session:getVariable("sip_req_user")
+        if dialed and dialed ~= "" then
+            session:setVariable("destination_number", dialed)
+            session:setVariable("caller_destination", dialed)
+            session:setVariable("dialed_number", dialed)
+            session:setVariable("original_destination_number", dialed)
+        end
+
+        local src_user = session:getVariable("sip_from_user") or session:getVariable("caller_id_number")
+        if src_user and src_user ~= "" then
+            session:setVariable("source_number", src_user)
+        end
+
+        enable_recording_if_needed("outbound")
+        freeswitch.consoleLog("info", "[routing.lua] Setting sip_rh_X-FS-UUID " .. session:getVariable("uuid") .. "\n")
+        session:setVariable("sip_rh_X-FS-UUID", session:getVariable("uuid"))
+        session:setVariable("sip_rh_X-Call-ID", session:getVariable("sip_call_id"))
         return handlers.outbound(args, route_info)
+    else
+        freeswitch.consoleLog("info", "[routing] No outbound route matched, proceeding with local extensions.\n")   
     end
 
     -- Local extension ranges
