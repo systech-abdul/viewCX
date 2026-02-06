@@ -452,7 +452,8 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
         end
 
     elseif action_type == "aiagent" then
-        
+            
+           enable_recording_if_needed("inbound")
             ------------------------------------------------------------------
             -- SQL Query
             ------------------------------------------------------------------
@@ -698,6 +699,7 @@ function handlers.callcenter(args)
     local queue = queue_extension .. "@" .. domain_name
     freeswitch.consoleLog("info", "[CallCenter] Joining queue: " .. queue .. "\n")
 
+
     -- Query the database for queue info
     local queue_data = nil
     local sql = [[
@@ -762,6 +764,7 @@ function handlers.callcenter(args)
    
 
     session:setVariable("queue", queue)
+    session:setVariable("information_node", "queue_answered")
 
     --local data = "{'lang':'eng','test':'testest'}"
     local data = session:getVariable("meta_data")
@@ -953,6 +956,9 @@ function handlers.ivr(args, counter)
     local MAX_PATH_STEPS = 20
 
     lua_ivr_vars = lua_ivr_vars or {}
+    
+    session:setVariable("information_node", "ivr_hangup");
+    --session:execute("export", "information_node=ivr_hangup")
 
     -- Caller info
     local src_phone = session:getVariable("sip_from_user")
@@ -1142,7 +1148,7 @@ function handlers.ivr(args, counter)
 
     
     if information_node == 't' then
-    session:setVariable("call_result", "SUCCESS")
+    session:setVariable("information_node", "ivr_answered")
     --session:setVariable("export_vars", "call_result,information_node")
     end
     
@@ -1261,7 +1267,7 @@ function handlers.ivr(args, counter)
     end
 
 
-    --freeswitch.consoleLog("console","parent_variable   " ..parent_variable);
+    freeswitch.consoleLog("console","parent_variable   " ..parent_variable);
     -- Save IVR journey
     dbh:query([[
         INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, variables, updated_at)
@@ -1322,6 +1328,7 @@ function handlers.ivr(args, counter)
         session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
         local parent = session:getVariable("parent_ivr_id")
         if parent and not visited[parent] then
+            
             visited[parent] = true
             args.destination = parent
 
@@ -1426,11 +1433,13 @@ function handlers.ivr(args, counter)
             --     greeting = "Hello, how can I help you?" -- Text sent to TTS usually
             -- }
             local config = ai.metadata;
+            
+            session:setVariable("information_node","bot_answered");
             ai_ws.run_ai_engine(session,config)
             return
         
         
-    elseif action_type == "extension" or action_type == "ringgroup" or action_type == "callcenter" or action_type == "conf" then
+    elseif action_type == "extension" or action_type == "ringgroup" --[[ or action_type == "callcenter" ]] or action_type == "conf" then
         session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
         session:execute("transfer", target .. " XML systech")
 
@@ -1727,7 +1736,9 @@ function timegroup(time_grp_uuid, ivr_menu_uuid, input,exit_node)
             destination_type = ivr_data.failover_destination_type
             destination_number = ivr_data.failover_destination_num
             routing_note = "failover timegroup routing"
-            session:setVariable("call_result", "NON_WORKING_HOUR")
+            --session:setVariable("call_result", "NON_WORKING_HOUR")
+            session:setVariable("information_node", "ivr_non_working_hour")
+            
             
         end
     end
@@ -1781,6 +1792,7 @@ function did_ivrs(id)
         
         
         session:setVariable("ivr_menu_extension", tostring(args.destination) )
+        session:setVariable("parent_ivr_id", tostring(args.destination) )
         handlers.ivr(args)
     else
         freeswitch.consoleLog("err", "[did_ivrs] No IVR Menu found for ivrs.id = " .. tostring(id) .. "\n")
