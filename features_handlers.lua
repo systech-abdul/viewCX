@@ -790,93 +790,140 @@ function handlers.callcenter(args)
     end
     
  
-    -- Parse JSON options from queue_flow_json
+    
+    --------------------------------------------------------------------------
+    -- Fetch IVR options (NO JSON)
+    --------------------------------------------------------------------------
+    local option_row = nil
+    local option_sql = [[
+        SELECT
+            COALESCE(
+                string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits),
+                ''
+            ) AS option_key,
+            COALESCE(
+                string_agg(
+                    op.ivr_menu_option_action || '_' || op.ivr_menu_option_param,
+                    ',' ORDER BY op.ivr_menu_option_digits
+                ),
+                ''
+            ) AS actions,
+              m.ivr_menu_uuid
+        FROM v_ivr_menus m
+        LEFT JOIN v_ivr_menu_options op
+            ON m.ivr_menu_uuid = op.ivr_menu_uuid
+        JOIN  ivrs  ON ivrs.id = :ivr_id
+        WHERE m.ivr_menu_uuid = ivrs.start_node
+          AND m.domain_uuid = :domain_uuid
+          AND m.deleted_at IS NULL
+          GROUP BY m.ivr_menu_uuid
+    ]]
+
+    dbh:query(option_sql, {
+        ivr_id = queue_data.ivr_node ,
+        domain_uuid = domain_uuid
+    }, function(row)
+        option_row = row
+    end)
+
+
+    freeswitch.consoleLog("INFO", "[CallCenter][option_sql]\n" .. option_sql .. "\n")
+    freeswitch.consoleLog(
+        "INFO",
+        string.format(
+            "[CallCenter][option_sql params] destination=%s | domain_uuid=%s\n",
+            tostring(queue_data.ivr_node),
+            tostring(domain_uuid)
+        )
+    )
+
+    if option_row then
+        freeswitch.consoleLog(
+            "INFO",
+            "[CallCenter] option_key=" .. tostring(option_row.option_key) ..
+            " actions=" .. tostring(option_row.actions) .. "\n"
+        )
+    end
+
+
+    --------------------------------------------------------------------------
+    -- Build options table
+    --------------------------------------------------------------------------
     local options = {}
-    if queue_data.queue_flow_json and queue_data.queue_flow_json ~= '' then
-        local success, decoded = pcall(json.decode, queue_data.queue_flow_json)
-        if success and decoded and decoded.options then
-            options = decoded.options
-        else
-            freeswitch.consoleLog("WARNING", "[CallCenter] Failed to parse JSON options\n")
+
+    local function split(str, sep)
+        local t = {}
+        for s in string.gmatch(str, "([^" .. sep .. "]+)") do
+            table.insert(t, s)
         end
-    else
-        freeswitch.consoleLog("INFO", "[CallCenter] No queue_flow_json or empty string\n")
+        return t
     end
 
-    -- Dynamically bind digit actions
-    
+    if option_row and option_row.option_key ~= '' and option_row.actions ~= '' then
+        local keys = split(option_row.option_key, ",")
+        local actions = split(option_row.actions, ",")
 
-
-   for key, config in pairs(options) do
-    if key and type(config) == "table" and config.action and config.value then
-        local action = config.action
-        local value = config.value
-        local hangup = config.hangup 
-
-        local bind_str = nil
-
-        if action == "transfer" then
-            bind_str = string.format("queue_control,%s,exec:transfer,%s XML systech,both,self", key, value)
-        elseif action == "callback" then
-            bind_str = string.format("queue_control,%s,exec:lua,callback.lua %s", key, value)
-        elseif action == "api" then
-            --session:setVariable("encoded_payload", {})
-            session:setVariable("api_id", value)
-            session:setVariable("should_hangup", tostring(hangup))
-
-            bind_str = string.format("queue_control,%s,exec:lua,api_handler.lua %s ",key,value)
-
-            freeswitch.consoleLog("INFO", "[CallCenter] hangup after api calll " .. tostring(hangup) .. "\n")
-            
-
-        else
-            freeswitch.consoleLog("WARNING", "[CallCenter] Unknown action for key " .. tostring(key) .. ": " .. tostring(action) .. "\n")
+        for i, digit in ipairs(keys) do
+            local action_str = actions[i]
+            if action_str then
+                local action, value = action_str:match("([^_]+)_(.+)")
+                if action and value then
+                    options[digit] = {
+                        action = action,
+                        value = value
+                    }
+                end
+            end
         end
-
-        if bind_str then
-            freeswitch.consoleLog("INFO", "[CallCenter] Binding digit " .. tostring(key) .. " to action " .. tostring(action) .. " with value " .. tostring(value) .. "\n")
-            session:execute("bind_digit_action", bind_str)
-        end
-    else
-        freeswitch.consoleLog("WARNING", "[CallCenter] Invalid or missing config for key: " .. tostring(key) .. "\n")
-    end
     end
 
+    --------------------------------------------------------------------------
+    -- Bind digit actions
+    --------------------------------------------------------------------------
+     for key, config in pairs(options) do
+    local action = config.action
 
+    
+    local value  = config.value
+    local bind_str = nil
 
-    -- Prepare variables for announcement script
-    local queue_announce_frequency = tonumber(queue_data.queue_announce_frequency) or 5000
-    local agent_log = (queue_data.agent_log) 
-    
-    
    
+    if action == "api" then
+        session:setVariable("api_id", value)
+        bind_str = string.format(
+            "queue_control,%s,exec:lua,api_handler.lua %s",
+            key, value
+        )
+    
+    elseif action == "timegroup" then
+    bind_str = string.format(
+        "queue_control,%s,exec:lua,ivr_action_handler.lua timegroup %s %s %s",
+        key, value, option_row.ivr_menu_uuid,key)
 
-    if agent_log == "t" then
-    -- Run list_agents.lua
-    session:execute("lua", "list_agents.lua " .. queue)
+    elseif action == "voicemail" or action == "hangup"  then
+    bind_str = string.format(
+    "queue_control,%s,exec:lua,ivr_action_handler.lua %s %s %s %s",
+    key, action,value, domain_name, domain_uuid)
+
+
+
+    else
+         bind_str = string.format(
+            "queue_control,%s,exec:transfer,%s XML systech,both,self",
+            key, value
+        )
+
     end
 
-    -- Run background announcement/prompt Lua
-  
-  local recording_filename= queue_data.recording_filename 
-  
-  if recording_filename ~= nil and recording_filename ~= '' then
-    local base_path = get_base_path(args.domain)
-    local queue_announce_sound = base_path .. queue_data.recording_filename 
-
-    freeswitch.consoleLog("console", "[CallCenter] queue_announce_sound: " .. tostring(queue_announce_sound) .. "\n")
-
-    local api = freeswitch.API()
-    api:execute("luarun", string.format(
-        "callcenter-announce-and-prompt.lua %s %s %d %s",
-        uuid,
-        queue,
-        queue_announce_frequency,
-        queue_announce_sound
-    ))
+    if bind_str then
+        freeswitch.consoleLog(
+            "INFO",
+            "[CallCenter] Binding digit " .. key ..
+            " → " .. action .. " (" .. value .. ")\n"
+        )
+        session:execute("bind_digit_action", bind_str)
+    end
 end
-
-
     -- Transfer to queue
     session:execute("callcenter", queue)
    
@@ -1423,15 +1470,7 @@ function handlers.ivr(args, counter)
             freeswitch.consoleLog("info","[ivr.aiagent] Provider Info " .. json.encode(ai.metadata) .."\n")
             freeswitch.consoleLog("info","[ivr.aiagent] Loaded AI Agent ID " .. target .."\n")
         
-            -- local config = {
-            --     ai_provider = "deepgram-convai",
-            --     deepgram_api_key = "71cd12a454001b8a12baeeec5543d12b0f5278b6", -- Optional, if not set in ENV
-            --     listen_model = "nova-3",
-            --     speak_model = "aura-2-thalia-en",
-            --     system_prompt = "You are a helpful banking assistant.",
-            --     first_message = "Hello, how can I help you with your bank account?",
-            --     greeting = "Hello, how can I help you?" -- Text sent to TTS usually
-            -- }
+          
             local config = ai.metadata;
             
             session:setVariable("information_node","bot_answered");
