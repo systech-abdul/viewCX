@@ -1373,7 +1373,7 @@ function handlers.ivr(args, counter)
     elseif action_type == "callcenter" then
 
         session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
-        local parent = session:getVariable("parent_ivr_id")
+        local parent = session:getVariable("parent_ivr_id") or 1
         if parent and not visited[parent] then
             
             visited[parent] = true
