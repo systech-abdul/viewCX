@@ -768,6 +768,7 @@ function handlers.callcenter(args)
 
     --local data = "{'lang':'eng','test':'testest'}"
     local data = session:getVariable("meta_data")
+   
     if data then
         local b64 = base64.encode(data)
 
@@ -897,12 +898,12 @@ function handlers.callcenter(args)
     
     elseif action == "timegroup" then
     bind_str = string.format(
-        "queue_control,%s,exec:lua,ivr_action_handler.lua timegroup %s %s %s",
+        "queue_control,%s,exec:lua,action_handler.lua timegroup %s %s %s",
         key, value, option_row.ivr_menu_uuid,key)
 
     elseif action == "voicemail" or action == "hangup"  then
     bind_str = string.format(
-    "queue_control,%s,exec:lua,ivr_action_handler.lua %s %s %s %s",
+    "queue_control,%s,exec:lua,action_handler.lua %s %s %s %s",
     key, action,value, domain_name, domain_uuid)
 
 
@@ -1027,75 +1028,83 @@ function handlers.ivr(args, counter)
 
         -- === SQL Query (with greet_short, invalid, exit) ===
     local query = [[
-        SELECT
-            COALESCE(string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits), '') AS option_key,
-            COALESCE(string_agg(op.ivr_menu_option_action || '_' || op.ivr_menu_option_param, ',' ORDER BY op.ivr_menu_option_digits), '') AS actions,
+    SELECT
+        COALESCE(string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits), '') AS option_key,
+        COALESCE(string_agg(op.ivr_menu_option_action || '_' || op.ivr_menu_option_param, ',' ORDER BY op.ivr_menu_option_digits), '') AS actions,
 
-            -- IVR sound UUIDs
-            m.ivr_menu_greet_long AS greet_long,
-            m.ivr_menu_greet_short AS greet_short,
-            m.ivr_menu_invalid_sound AS invalid_sound,
-            m.ivr_menu_exit_sound AS exit_sound,
-            m.ivr_menu_no_input_sound AS no_input_sound,  
-            m.language AS language,  
-            -- Recording filenames
-            r_long.recording_filename   AS greet_long_filename,
-            r_short.recording_filename  AS greet_short_filename,
-            r_invalid.recording_filename AS invalid_sound_filename,
-            r_exit.recording_filename   AS exit_sound_filename,
-            r_no_input.recording_filename AS no_input_sound_filename, 
+        m.ivr_menu_greet_long AS greet_long,
+        m.ivr_menu_greet_short AS greet_short,
+        m.ivr_menu_invalid_sound AS invalid_sound,
+        m.ivr_menu_exit_sound AS exit_sound,
+        m.ivr_menu_no_input_sound AS no_input_sound,
+        m.language AS language,
 
-            1 AS min_digit,
-            MAX(m.ivr_menu_digit_len) AS max_digit,
-            MAX(m.ivr_menu_inter_digit_timeout) AS inter_digit_timeout,
-            MAX(m.ivr_menu_timeout) AS timeout,
-            MIN(CASE WHEN m.ivr_menu_max_failures > 5 THEN 5 ELSE m.ivr_menu_max_failures END) AS max_failures,
+        r_long.recording_filename AS greet_long_filename,
+        r_short.recording_filename AS greet_short_filename,
+        r_invalid.recording_filename AS invalid_sound_filename,
+        r_exit.recording_filename AS exit_sound_filename,
+        r_no_input.recording_filename AS no_input_sound_filename,
 
-            m.ivr_menu_confirm_macro,
-            m.ivr_menu_name AS name,
-            MIN(op.preferred_gateway_uuid::text) AS preferred_gateway_uuid,
-            m.ivr_menu_uuid,
-            MIN(d.domain_name::text) AS domain_name,
-            MIN(m.variables::text) AS parent_variable,
-            m.playback_type,
-            m.playback_type_short,
-            m.playback_text,
-            m.playback_text_short,
-            m.ivr_menu_exit_app,
-            m.ivr_menu_exit_data,
-            m.information_node 
+        1 AS min_digit,
+        MAX(m.ivr_menu_digit_len) AS max_digit,
+        MAX(m.ivr_menu_inter_digit_timeout) AS inter_digit_timeout,
+        MAX(m.ivr_menu_timeout) AS timeout,
 
+        MIN(CASE WHEN m.ivr_menu_max_failures > 5 THEN 5 ELSE m.ivr_menu_max_failures END) AS max_failures,
+        MIN(CASE WHEN m.ivr_menu_max_timeouts > 5 THEN 5 ELSE m.ivr_menu_max_timeouts END) AS max_no_input,
 
-        FROM v_ivr_menus m
-        LEFT JOIN v_ivr_menu_options op ON m.ivr_menu_uuid = op.ivr_menu_uuid
-        JOIN v_domains d ON d.domain_uuid = m.domain_uuid
+        m.ivr_menu_confirm_macro,
+        m.ivr_menu_name AS name,
+        MIN(op.preferred_gateway_uuid::text) AS preferred_gateway_uuid,
+        m.ivr_menu_uuid,
+        MIN(d.domain_name::text) AS domain_name,
+        MIN(m.variables::text) AS parent_variable,
+        m.playback_type,
+        m.playback_type_short,
+        m.playback_text,
+        m.playback_text_short,
+        m.ivr_menu_exit_app,
+        m.ivr_menu_exit_data,
+        m.information_node
 
-        -- Recording joins
-        LEFT JOIN v_recordings r_long     ON r_long.recording_uuid::text    = m.ivr_menu_greet_long
-        LEFT JOIN v_recordings r_short    ON r_short.recording_uuid::text   = m.ivr_menu_greet_short
-        LEFT JOIN v_recordings r_invalid  ON r_invalid.recording_uuid::text = m.ivr_menu_invalid_sound
-        LEFT JOIN v_recordings r_exit     ON r_exit.recording_uuid::text    = m.ivr_menu_exit_sound
-        LEFT JOIN v_recordings r_no_input ON r_no_input.recording_uuid::text = m.ivr_menu_no_input_sound
+    FROM v_ivr_menus m
+    LEFT JOIN v_ivr_menu_options op ON m.ivr_menu_uuid = op.ivr_menu_uuid
+    JOIN v_domains d ON d.domain_uuid = m.domain_uuid
 
-        WHERE m.ivr_menu_extension = :destination
-          AND m.domain_uuid = :domain_uuid
-        AND m.deleted_at IS NULL
-        GROUP BY
-            m.ivr_menu_greet_long,
-            m.ivr_menu_greet_short,
-            m.ivr_menu_invalid_sound,
-            m.ivr_menu_exit_sound,
-            m.ivr_menu_no_input_sound,  
-            m.language,
-            m.ivr_menu_confirm_macro,
-            m.ivr_menu_name,
-            m.ivr_menu_uuid,
-            r_long.recording_filename,
-            r_short.recording_filename,
-            r_invalid.recording_filename,
-            r_exit.recording_filename,
-            r_no_input.recording_filename  
-    ]]
+    LEFT JOIN v_recordings r_long ON r_long.recording_uuid::text = m.ivr_menu_greet_long
+    LEFT JOIN v_recordings r_short ON r_short.recording_uuid::text = m.ivr_menu_greet_short
+    LEFT JOIN v_recordings r_invalid ON r_invalid.recording_uuid::text = m.ivr_menu_invalid_sound
+    LEFT JOIN v_recordings r_exit ON r_exit.recording_uuid::text = m.ivr_menu_exit_sound
+    LEFT JOIN v_recordings r_no_input ON r_no_input.recording_uuid::text = m.ivr_menu_no_input_sound
+
+    WHERE m.ivr_menu_extension = :destination
+      AND m.domain_uuid = :domain_uuid
+      AND m.deleted_at IS NULL
+
+    GROUP BY
+        m.ivr_menu_greet_long,
+        m.ivr_menu_greet_short,
+        m.ivr_menu_invalid_sound,
+        m.ivr_menu_exit_sound,
+        m.ivr_menu_no_input_sound,
+        m.language,
+        m.ivr_menu_confirm_macro,
+        m.ivr_menu_name,
+        m.ivr_menu_uuid,
+        r_long.recording_filename,
+        r_short.recording_filename,
+        r_invalid.recording_filename,
+        r_exit.recording_filename,
+        r_no_input.recording_filename,
+        m.playback_type,
+        m.playback_type_short,
+        m.playback_text,
+        m.playback_text_short,
+        m.ivr_menu_exit_app,
+        m.ivr_menu_exit_data,
+        m.information_node
+]]
+
 
 
     
@@ -1181,121 +1190,173 @@ function handlers.ivr(args, counter)
    
     
      
-    --  Timing and logic setup
-    local min_digit = tonumber(ivr_data.min_digit) or 1
-    local max_digit = tonumber(ivr_data.max_digit) or 1
-    local timeout = tonumber(ivr_data.timeout) or 3000
-    local inter_digit_timeout = tonumber(ivr_data.inter_digit_timeout) or 2000
-    local max_failures = tonumber(ivr_data.max_failures) or 3
-    local parent_variable = ivr_data.parent_variable
-    local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
-    local ivr_menu_exit_app = ivr_data.ivr_menu_exit_app
-    local ivr_menu_exit_data = ivr_data.ivr_menu_exit_data
-    local information_node = ivr_data.information_node 
+  ------------------------------------------------------
+-- Timing and logic setup
+------------------------------------------------------
+local min_digit = tonumber(ivr_data.min_digit) or 1
+local max_digit = tonumber(ivr_data.max_digit) or 1
+local timeout = tonumber(ivr_data.timeout) or 3000
+local inter_digit_timeout = tonumber(ivr_data.inter_digit_timeout) or 2000
 
-    
-    if information_node == 't' then
+local max_failures = tonumber(ivr_data.max_failures) or 3
+local max_no_input = tonumber(ivr_data.max_no_input) or 3
+
+-- Working counters
+local remaining_failures = max_failures
+local remaining_no_input = max_no_input
+
+local parent_variable = ivr_data.parent_variable
+local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
+local ivr_menu_exit_app = ivr_data.ivr_menu_exit_app
+local ivr_menu_exit_data = ivr_data.ivr_menu_exit_data
+local information_node = ivr_data.information_node
+
+if information_node == 't' then
     session:setVariable("information_node", "ivr_answered")
-    --session:setVariable("export_vars", "call_result,information_node")
-    end
-    
-    local keys = split(ivr_data.option_key or "", ",")
-    local actions = split(ivr_data.actions or "", ",")
+end
 
-    --  Build digit regex safely
-    local digit_regex = "[0-9]"
+local keys = split(ivr_data.option_key or "", ",")
+local actions = split(ivr_data.actions or ",", ",")
 
-    local key_action_list = {}
-    for i = 1, #keys do
-        addLast(key_action_list, keys[i], actions[i])
-    end
+local key_action_list = {}
 
-    session:answer()
-    session:execute("set", "application_state=ivr")
+for i = 1, #keys do
+    addLast(key_action_list, keys[i], actions[i])
 
-    --  Smart greeting selection (root vs nested IVR)
-    local parent_ivr_id = session:getVariable("parent_ivr_id")
-   
+    -- Log key → action mapping (no logic change)
+    local key = keys[i] or ""
+    local action_string = actions[i] or ""
 
+    local action_type, target = action_string:match("^([^_]+)_(.+)$")
+    action_type = action_type or action_string
+    target = target or ""
 
-    
-    ------------------------------------------------------
-    -- Collect input
-    ------------------------------------------------------
-    local input, matched_action, action_type, target = nil, nil, nil, nil
-
-    --  Play greeting and collect digits 
-   
-    local play_greeting = ""
-    local greet_counter =0
-    while max_failures > 0  and check_session()  do
-
-         if greet_counter ==0 then
-            freeswitch.consoleLog("console", "[IVR] welcome greet at greet_counter 0 " .. greet_long_path .. "\n")
-             --welcome from greet_long_path only for first time 
-            play_greeting = greet_long_path;
-        
-        
-         else
-              if greet_short_path ~= "" and file_exists(greet_short_path) then
-        play_greeting = greet_short_path
-        freeswitch.consoleLog("INFO", "[IVR] Using greet_short: " .. play_greeting .. "\n")
-          -- Fallback to greet_long
-          elseif greet_long_path ~= "" and file_exists(greet_long_path) then
-              play_greeting = greet_long_path
-              freeswitch.consoleLog("INFO", "[IVR] Fallback to greet_long: " .. play_greeting .. "\n")
-          else
-              freeswitch.consoleLog("WARNING", "[IVR] No valid greeting file found\n")
-          end
-            
-
-        end
-
-            
-        
-      
-
-        input = session:playAndGetDigits(
-            min_digit, max_digit, 1, timeout, "#",
-            play_greeting, nil, "[0-9*#]", "input_digits", inter_digit_timeout, nil
+    freeswitch.consoleLog("INFO",
+        string.format("[IVR MAP] Key: %s → Action: %s | Target: %s\n",
+            tostring(key),
+            tostring(action_type),
+            tostring(target)
         )
+    )
+end
 
-        freeswitch.consoleLog("INFO", "[IVR] playAndGetDigits input: " .. tostring(input) .. "\n")
 
+session:answer()
+session:execute("set", "application_state=ivr")
 
-        if not input or input == "" then
-            freeswitch.consoleLog("INFO", "[IVR] No input, playing no_input sound\n")
-            if no_input_sound_path ~= "" then session:execute("playback", no_input_sound_path) end
-            max_failures = max_failures - 1
-            greet_counter =greet_counter+1
-            goto continue
-        end
+------------------------------------------------------
+-- Collect Input
+------------------------------------------------------
+local input, matched_action, action_type, target = nil, nil, nil, nil
+local greet_counter = 0
 
-        matched_action = search(key_action_list, input)
-        if matched_action then
-            action_type, target = matched_action:match("^([^_]+)_(.+)$")
-            action_type = action_type or matched_action
-            target = target or ""
-        else
-            action_type, target = nil, nil
-        end
+while check_session() do
 
-        freeswitch.consoleLog("INFO", string.format("[IVR] Selected input: %s -> action: %s target: %s\n",
-            tostring(input), tostring(action_type), tostring(target)))
-
-        if not action_type then
-            freeswitch.consoleLog("INFO", "[IVR] Invalid input, playing invalid sound\n")
-            if invalid_sound_path ~= "" then session:execute("playback", invalid_sound_path) end
-            max_failures = max_failures - 1
-            greet_counter =greet_counter+1
-            goto continue
-        end
-
-        -- Valid action
+    if remaining_failures <= 0 and remaining_no_input <= 0 then
+        freeswitch.consoleLog("WARNING", "[IVR] All attempt limits reached\n")
         break
-
-        ::continue::
     end
+
+    --------------------------------------------------
+    -- Greeting Selection
+    --------------------------------------------------
+    local play_greeting = ""
+
+    if greet_counter == 0 then
+        play_greeting = greet_long_path
+    else
+        if greet_short_path ~= "" and file_exists(greet_short_path) then
+            play_greeting = greet_short_path
+        elseif greet_long_path ~= "" and file_exists(greet_long_path) then
+            play_greeting = greet_long_path
+        end
+    end
+
+    --------------------------------------------------
+    -- Play & Collect Digits
+    --------------------------------------------------
+    input = session:playAndGetDigits(
+        min_digit,
+        max_digit,
+        1,
+        timeout,
+        "#",
+        play_greeting,
+        nil,
+        "[0-9*#]",
+        "input_digits",
+        inter_digit_timeout,
+        nil
+    )
+
+    freeswitch.consoleLog("INFO", "[IVR] User input: " .. tostring(input) .. "\n")
+
+    --------------------------------------------------
+    -- NO INPUT
+    --------------------------------------------------
+    if not input or input == "" then
+        remaining_no_input = remaining_no_input - 1
+
+        freeswitch.consoleLog("INFO",
+            "[IVR] No input. Remaining no-input: "
+            .. remaining_no_input .. "\n")
+
+        if no_input_sound_path ~= "" then
+            session:execute("playback", no_input_sound_path)
+        end
+
+        greet_counter = greet_counter + 1
+
+        if remaining_no_input <= 0 then
+            freeswitch.consoleLog("WARNING", "[IVR] Max no-input reached\n")
+            break
+        end
+
+        goto continue
+    end
+
+    --------------------------------------------------
+    -- Match Action
+    --------------------------------------------------
+    matched_action = search(key_action_list, input)
+
+    if matched_action then
+        action_type, target = matched_action:match("^([^_]+)_(.+)$")
+        action_type = action_type or matched_action
+        target = target or ""
+    end
+
+    --------------------------------------------------
+    -- INVALID INPUT
+    --------------------------------------------------
+    if not action_type then
+        remaining_failures = remaining_failures - 1
+
+        freeswitch.consoleLog("INFO",
+            "[IVR] Invalid input. Remaining invalid: "
+            .. remaining_failures .. "\n")
+
+        if invalid_sound_path ~= "" then
+            session:execute("playback", invalid_sound_path)
+        end
+
+        greet_counter = greet_counter + 1
+
+        if remaining_failures <= 0 then
+            freeswitch.consoleLog("WARNING", "[IVR] Max invalid reached\n")
+            break
+        end
+
+        goto continue
+    end
+
+    --------------------------------------------------
+    -- VALID INPUT
+    --------------------------------------------------
+    break
+
+    ::continue::
+end
 
 
     if parent_variable and input then
@@ -1374,7 +1435,7 @@ function handlers.ivr(args, counter)
 
         session:setVariable("meta_data",  json.encode(lua_ivr_vars or {}))
         local parent = session:getVariable("parent_ivr_id")
-        if parent and not visited[parent] then
+        if parent and not visited[parent] then  
             
             visited[parent] = true
             args.destination = parent
