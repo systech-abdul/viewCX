@@ -408,7 +408,7 @@ function route_action(action_type, target, domain_name, domain_uuid, ivr_menu_uu
                 args.destination = target
                 args.domain_uuid = domain_uuid
                 args.domain = domain_name
-                local counter = 0
+                local counter = { count = 0 }
                 return handlers.ivr(args, counter)
         else
             did_ivrs(target);
@@ -1022,7 +1022,9 @@ function handlers.ivr(args, counter)
     lua_ivr_vars["language"] = language_code
 
     args.ivr_path = args.ivr_path or {}
-    counter = counter or { count = 0 }
+    if type(counter) ~= "table" then
+        counter = { count = 0 }
+    end
 
     freeswitch.consoleLog("INFO", string.format("[IVR] Routing to %s domain_uuid %s\n", tostring(destination), tostring(domain_uuid)))
 
@@ -1077,7 +1079,10 @@ function handlers.ivr(args, counter)
     LEFT JOIN v_recordings r_exit ON r_exit.recording_uuid::text = m.ivr_menu_exit_sound
     LEFT JOIN v_recordings r_no_input ON r_no_input.recording_uuid::text = m.ivr_menu_no_input_sound
 
-    WHERE m.ivr_menu_extension = :destination
+        WHERE (
+        m.ivr_menu_uuid::text = :destination
+     OR m.ivr_menu_extension::text  = :destination
+      )
       AND m.domain_uuid = :domain_uuid
       AND m.deleted_at IS NULL
 
@@ -1211,12 +1216,29 @@ local ivr_menu_exit_app = ivr_data.ivr_menu_exit_app
 local ivr_menu_exit_data = ivr_data.ivr_menu_exit_data
 local information_node = ivr_data.information_node
 
-if information_node == 't' then
-    session:setVariable("information_node", "ivr_answered")
+if information_node then
+    session:setVariable("information_node", information_node or "ivr_node")
 end
+
+-- Ensure the data exists before splitting to avoid nil errors
+local raw_keys = ivr_data.option_key or ""
+local raw_actions = ivr_data.actions or ""
 
 local keys = split(ivr_data.option_key or "", ",")
 local actions = split(ivr_data.actions or ",", ",")
+
+local no_input_action = false
+
+-- if raw_keys == "" or raw_actions == "" then
+--     freeswitch.consoleLog("ERR", "[IVR] Missing keys or actions continue Exit Action\n")
+
+--     action_type = ivr_menu_exit_app
+--     target = ivr_menu_exit_data
+--     input = ""
+--     no_input_action = true
+--     freeswitch.consoleLog("INFO", string.format("[IVR] Exit Actions -> action: %s target: %s\n",
+--         tostring(action_type), tostring(target)))
+-- end
 
 local key_action_list = {}
 
@@ -1294,7 +1316,17 @@ while check_session() do
     --------------------------------------------------
     -- NO INPUT
     --------------------------------------------------
-    if not input or input == "" then
+        if raw_keys == "" or raw_actions == "" then
+            freeswitch.consoleLog("WARNING", "[IVR] Missing keys or actions; proceeding with Exit Action\n")
+            no_input_action = true
+            if ivr_menu_exit_app and ivr_menu_exit_data then
+                freeswitch.consoleLog("INFO", string.format("[IVR] Executing exit action: %s %s\n", ivr_menu_exit_app, ivr_menu_exit_data))
+                action_type = ivr_menu_exit_app or ""
+                target = ivr_menu_exit_data or ""
+            else
+                freeswitch.consoleLog("ERR", "[IVR] No exit action defined for this menu\n")
+            end
+        elseif not input or input == "" then
         remaining_no_input = remaining_no_input - 1
 
         freeswitch.consoleLog("INFO",
@@ -1320,10 +1352,12 @@ while check_session() do
     --------------------------------------------------
     matched_action = search(key_action_list, input)
 
-    if matched_action then
+    if matched_action and no_input_action == false then
         action_type, target = matched_action:match("^([^_]+)_(.+)$")
         action_type = action_type or matched_action
         target = target or ""
+    elseif no_input_action == false then
+            action_type, target = nil, nil
     end
 
     --------------------------------------------------
