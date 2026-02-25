@@ -635,6 +635,7 @@ function handlers.extension(args)
     -- Call behavior
     session:setVariable("hangup_after_bridge", "true")
     session:setVariable("continue_on_fail", "true")
+   -- session:setVariable("sip_h_X-Tenant-Domain", "cc.systech.ae")
 
     -- ---------- Kamailio path ----------
     if kam_ip then
@@ -1665,6 +1666,8 @@ function handlers.outbound(args, route_info)
             return false
         end
     end
+
+
 
     -- Build failover bridge list
     local bridge_dest_list = {}

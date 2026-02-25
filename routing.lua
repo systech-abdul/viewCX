@@ -341,7 +341,10 @@ local function is_valid_did(dest)
     ------------------------------------------------------------------
     session:setVariable("did_type", route.destination_type or "")
     session:setVariable("did_destination", route.destination or "")
+    session:setVariable("sip_h_X-Tenant-Domain", route.domain_name)
     freeswitch.consoleLog("info", "[Routing] Route active today, proceeding with normal DID.\n")
+
+
     return true
     
 end
