@@ -1667,6 +1667,52 @@ function handlers.outbound(args, route_info)
         end
     end
 
+    -- 1. Identify the caller
+    local v_cid_name = session:getVariable("origination_caller_id_name") 
+                    or session:getVariable("effective_caller_id_name") 
+                    or session:getVariable("caller_id_name")
+                    or "048849344" -- Fallback
+
+    local v_cid_num  = session:getVariable("origination_caller_id_number")
+                    or session:getVariable("effective_caller_id_number")
+                    or session:getVariable("caller_id_number")
+                    or "048849344" -- Fallback
+
+    -- 2. Set authoritative variables on the A-leg (Session)
+    session:setVariable("origination_caller_id_name",   v_cid_name)
+    session:setVariable("origination_caller_id_number", v_cid_num)
+    session:setVariable("effective_caller_id_name",     v_cid_name)
+    session:setVariable("effective_caller_id_number",   v_cid_num)
+
+    -- 3. Collect explicit SIP overrides for the B-leg (Bridge)
+    local b_vars = {}
+    table.insert(b_vars, "origination_caller_id_name="   .. v_cid_name)
+    table.insert(b_vars, "origination_caller_id_number=" .. v_cid_num)
+    table.insert(b_vars, "from_user="                    .. v_cid_num)
+    table.insert(b_vars, "sip_from_user="                .. v_cid_num)
+    table.insert(b_vars, "sip_from_display="             .. v_cid_name)
+    
+    -- Force the SIP 'From' URI (Highest Authority)
+    local sip_uri = string.format('"%s" <sip:%s@%s>', v_cid_name, v_cid_num, session:getVariable("domain_name") or "localhost")
+    table.insert(b_vars, "sip_from_uri=" .. sip_uri)
+
+    local vars_prefix = ""
+    if #b_vars > 0 then
+        vars_prefix = "{" .. table.concat(b_vars, ",") .. "}"
+    end
+
+    local bridge_dest_list = {}
+    for _, gw in ipairs(gateways) do
+        table.insert(bridge_dest_list, string.format("%ssofia/gateway/%s/%s", vars_prefix, gw, dial_number))
+    end
+
+    local bridge_dest = table.concat(bridge_dest_list, "|")
+    freeswitch.consoleLog("info", "[handlers.outbound] Attempting bridge to: " .. bridge_dest .. "\n")
+
+    session:execute("bridge", bridge_dest)
+    return true
+end
+
 
 
     -- Build failover bridge list
