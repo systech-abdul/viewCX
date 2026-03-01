@@ -1715,23 +1715,6 @@ end
 
 
 
-    -- Build failover bridge list
-    local bridge_dest_list = {}
-    for _, gw in ipairs(gateways) do
-        table.insert(bridge_dest_list, string.format("sofia/gateway/%s/%s", gw, dial_number))
-    end
-
-    local bridge_dest = table.concat(bridge_dest_list, "|")
-    freeswitch.consoleLog("info", "[handlers.outbound] Attempting bridge to: " .. bridge_dest .. "\n")
-
-    session:execute("bridge", bridge_dest)
-    return true
-end
-
-
-
-
-
 -- DID-based call dispatcher
 function handlers.handle_did_call(args)
     if not check_session() then
