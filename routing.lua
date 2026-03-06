@@ -224,7 +224,11 @@ local args = {
 
 -- DID validation
 local function is_valid_did(dest)
-    local caller_ip = session:getVariable("network_addr")
+    local caller_ip = session:getVariable("sip_h_X-Kamailio-Source")
+    and session:getVariable("sip_from_host")
+    or session:getVariable("network_addr")
+
+    
     freeswitch.consoleLog("info", "[Lua] Caller IP: " .. tostring(caller_ip) .. "\n")
 
     ------------------------------------------------------------------
