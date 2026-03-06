@@ -678,7 +678,9 @@ function handlers.extension(args)
 end
 
 
--- Call Center (4000–4999)
+-- ============================================
+-- CallCenter Handler (4000–4999)
+-- ============================================
 
 function handlers.callcenter(args)
     if not check_session() then
@@ -687,9 +689,9 @@ function handlers.callcenter(args)
 
     session:answer()
     session:sleep(1000)
-     
+
     if not session:ready() then
-        freeswitch.consoleLog("err", "Session not ready for bindDigitAction\n")
+        freeswitch.consoleLog("ERR", "[CallCenter] Session not ready for bindDigitAction\n")
         return false
     end
 
@@ -698,10 +700,11 @@ function handlers.callcenter(args)
     local domain_uuid = args.domain_uuid
     local domain_name = args.domain or session:getVariable("refer_domain")
     local queue = queue_extension .. "@" .. domain_name
-    freeswitch.consoleLog("info", "[CallCenter] Joining queue: " .. queue .. "\n")
+    freeswitch.consoleLog("INFO", "[CallCenter] Joining queue: " .. queue .. "\n")
 
-
-    -- Query the database for queue info
+    -- ============================================
+    -- Query queue info
+    -- ============================================
     local queue_data = nil
     local sql = [[
         SELECT 
@@ -720,7 +723,6 @@ function handlers.callcenter(args)
         domain_uuid = domain_uuid
     }
 
-
     dbh:query(sql, params, function(row)
         queue_data = row
     end)
@@ -731,128 +733,99 @@ function handlers.callcenter(args)
     end
 
     session:setVariable("queue_name", queue_data.queue_name or "default")
-
-
-    local direction = session:getVariable("direction") or "inbound"
-    
-    -- Call the recording function
-    enable_recording_if_needed(direction)
-    freeswitch.consoleLog("INFO", "Record File = " .. session:getVariable("record_path") .. "\n")
-    -- session:execute("info")
-    
-    --local src = session:getVariable("ani")
-
-     -- VIP logic
-       -- Fetch priority from queue_data
-    local priority = tonumber(queue_data.priority) or 10
-    local cc_base_score
-
-    freeswitch.consoleLog("console", "[CallCenter] priority = " .. priority .. "\n")
-    if priority >= 1 and priority <= 9 then
-    cc_base_score = 1100 - (priority * 100)
-    elseif priority == 10 then
-    cc_base_score = 0
-    else
-    cc_base_score = 0  -- fallback for invalid priorities
-    end
-
-    if cc_base_score ~= 0 then
-    session:setVariable("cc_base_score", tostring(cc_base_score))
-    end
-    
-    --session:execute("info")
-   
-   
-
     session:setVariable("queue", queue)
     session:setVariable("information_node", "queue_answered")
 
-    --local data = "{'lang':'eng','test':'testest'}"
+    -- ============================================
+    -- Enable call recording if needed
+    -- ============================================
+    local direction = session:getVariable("direction") or "inbound"
+    enable_recording_if_needed(direction)
+    freeswitch.consoleLog("INFO", "Record File = " .. tostring(session:getVariable("record_path")) .. "\n")
+
+    -- ============================================
+    -- VIP / Priority handling
+    -- ============================================
+    local priority = tonumber(queue_data.priority) or 10
+    local cc_base_score = 0
+    if priority >= 1 and priority <= 9 then
+        cc_base_score = 1100 - (priority * 100)
+    end
+    if cc_base_score ~= 0 then
+        session:setVariable("cc_base_score", tostring(cc_base_score))
+    end
+    freeswitch.consoleLog("INFO", "[CallCenter] priority = " .. priority .. ", cc_base_score = " .. cc_base_score .. "\n")
+
+    -- ============================================
+    -- Base64 encode meta-data if present
+    -- ============================================
     local data = session:getVariable("meta_data")
-   
     if data then
         local b64 = base64.encode(data)
-
         session:setVariable("meta_data", b64)
-        freeswitch.consoleLog("INFO", "Encoded = " .. b64 .. "\n")
-
-        local decoded = base64.decode(b64)
-        freeswitch.consoleLog("INFO", "Decoded = " .. decoded .. "\n")
+        freeswitch.consoleLog("INFO", "[CallCenter] Encoded meta_data = " .. b64 .. "\n")
     end
-    
 
-        -- Run background announcement/prompt Lua
-    local queue_greeting = queue_data.queue_greeting 
-  
-    if queue_greeting ~= nil and queue_greeting ~= '' then
-        local queue_greeting_sound = queue_greeting 
-        freeswitch.consoleLog("console", "[CallCenter] queue_greeting_sound: " .. tostring(queue_greeting_sound) .. "\n")
-        session:execute("playback", queue_greeting_sound)
-        session:sleep(1000)
+    -- ============================================
+    -- Play greeting if exists
+    -- ============================================
+    local queue_greeting = queue_data.queue_greeting
+    if queue_greeting and queue_greeting ~= "" then
+        if os.rename(queue_greeting, queue_greeting) then
+            freeswitch.consoleLog("INFO", "[CallCenter] Playing queue greeting: " .. queue_greeting .. "\n")
+            session:execute("playback", queue_greeting)
+            session:sleep(1000)
+        else
+            freeswitch.consoleLog("WARNING", "[CallCenter] Greeting file missing: " .. queue_greeting .. "\n")
+        end
     end
-    
- 
-    
-    --------------------------------------------------------------------------
-    -- Fetch IVR options (NO JSON)
-    --------------------------------------------------------------------------
+
+    -- ============================================
+    -- Fetch IVR options if defined
+    -- ============================================
     local option_row = nil
-    local option_sql = [[
-        SELECT
-            COALESCE(
-                string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits),
-                ''
-            ) AS option_key,
-            COALESCE(
-                string_agg(
-                    op.ivr_menu_option_action || '_' || op.ivr_menu_option_param,
-                    ',' ORDER BY op.ivr_menu_option_digits
-                ),
-                ''
-            ) AS actions,
-              m.ivr_menu_uuid
-        FROM v_ivr_menus m
-        LEFT JOIN v_ivr_menu_options op
-            ON m.ivr_menu_uuid = op.ivr_menu_uuid
-        JOIN  ivrs  ON ivrs.id = :ivr_id
-        WHERE m.ivr_menu_uuid = ivrs.start_node
-          AND m.domain_uuid = :domain_uuid
-          AND m.deleted_at IS NULL
-          GROUP BY m.ivr_menu_uuid
-    ]]
+    if queue_data.ivr_node and queue_data.ivr_node ~= "" then
+        local ivr_id = tonumber(queue_data.ivr_node)
+        if ivr_id then
+            local option_sql = [[
+                SELECT
+                    COALESCE(
+                        string_agg(DISTINCT op.ivr_menu_option_digits, ',' ORDER BY op.ivr_menu_option_digits),
+                        ''
+                    ) AS option_key,
+                    COALESCE(
+                        string_agg(
+                            op.ivr_menu_option_action || '_' || op.ivr_menu_option_param,
+                            ',' ORDER BY op.ivr_menu_option_digits
+                        ),
+                        ''
+                    ) AS actions,
+                    m.ivr_menu_uuid
+                FROM v_ivr_menus m
+                LEFT JOIN v_ivr_menu_options op
+                    ON m.ivr_menu_uuid = op.ivr_menu_uuid
+                JOIN ivrs ON ivrs.id = :ivr_id
+                WHERE m.ivr_menu_uuid = ivrs.start_node
+                  AND m.domain_uuid = :domain_uuid
+                  AND m.deleted_at IS NULL
+                GROUP BY m.ivr_menu_uuid
+            ]]
 
-    dbh:query(option_sql, {
-        ivr_id = queue_data.ivr_node ,
-        domain_uuid = domain_uuid
-    }, function(row)
-        option_row = row
-    end)
+            dbh:query(option_sql, { ivr_id = ivr_id, domain_uuid = domain_uuid }, function(row)
+                option_row = row
+            end)
 
-
-    freeswitch.consoleLog("INFO", "[CallCenter][option_sql]\n" .. option_sql .. "\n")
-    freeswitch.consoleLog(
-        "INFO",
-        string.format(
-            "[CallCenter][option_sql params] destination=%s | domain_uuid=%s\n",
-            tostring(queue_data.ivr_node),
-            tostring(domain_uuid)
-        )
-    )
-
-    if option_row then
-        freeswitch.consoleLog(
-            "INFO",
-            "[CallCenter] option_key=" .. tostring(option_row.option_key) ..
-            " actions=" .. tostring(option_row.actions) .. "\n"
-        )
+            freeswitch.consoleLog("INFO", "[CallCenter][option_sql] " .. option_sql .. "\n")
+            freeswitch.consoleLog("INFO", string.format("[CallCenter] ivr_node=%s, domain_uuid=%s\n", queue_data.ivr_node, domain_uuid))
+        else
+            freeswitch.consoleLog("WARNING", "[CallCenter] Invalid IVR node id: " .. queue_data.ivr_node .. "\n")
+        end
     end
 
-
-    --------------------------------------------------------------------------
-    -- Build options table
-    --------------------------------------------------------------------------
+    -- ============================================
+    -- Build and bind digit actions
+    -- ============================================
     local options = {}
-
     local function split(str, sep)
         local t = {}
         for s in string.gmatch(str, "([^" .. sep .. "]+)") do
@@ -861,79 +834,58 @@ function handlers.callcenter(args)
         return t
     end
 
-    if option_row and option_row.option_key ~= '' and option_row.actions ~= '' then
+    if option_row and option_row.option_key ~= "" and option_row.actions ~= "" then
         local keys = split(option_row.option_key, ",")
         local actions = split(option_row.actions, ",")
+        if #keys ~= #actions then
+            freeswitch.consoleLog("WARNING", "[CallCenter] Mismatched IVR option keys/actions\n")
+        end
 
         for i, digit in ipairs(keys) do
             local action_str = actions[i]
             if action_str then
                 local action, value = action_str:match("([^_]+)_(.+)")
                 if action and value then
-                    options[digit] = {
-                        action = action,
-                        value = value
-                    }
+                    options[digit] = { action = action, value = value }
                 end
             end
         end
     end
 
-    --------------------------------------------------------------------------
-    -- Bind digit actions
-    --------------------------------------------------------------------------
-     for key, config in pairs(options) do
-    local action = config.action
+    for key, config in pairs(options) do
+        local bind_str
+        local action = config.action
+        local value  = config.value
 
-    
-    local value  = config.value
-    local bind_str = nil
+        if action == "api" then
+            session:setVariable("api_id", value)
+            bind_str = string.format("queue_control,%s,exec:lua,api_handler.lua %s", key, value)
+        elseif action == "timegroup" then
+            bind_str = string.format("queue_control,%s,exec:lua,action_handler.lua timegroup %s %s %s",
+                key, value, option_row.ivr_menu_uuid, key)
+        elseif action == "voicemail" or action == "hangup" then
+            bind_str = string.format("queue_control,%s,exec:lua,action_handler.lua %s %s %s %s",
+                key, action, value, domain_name, domain_uuid)
+        else
+            bind_str = string.format("queue_control,%s,exec:transfer,%s XML systech,both,self", key, value)
+        end
 
-   
-    if action == "api" then
-        session:setVariable("api_id", value)
-        bind_str = string.format(
-            "queue_control,%s,exec:lua,api_handler.lua %s",
-            key, value
-        )
-    
-    elseif action == "timegroup" then
-    bind_str = string.format(
-        "queue_control,%s,exec:lua,action_handler.lua timegroup %s %s %s",
-        key, value, option_row.ivr_menu_uuid,key)
-
-    elseif action == "voicemail" or action == "hangup"  then
-    bind_str = string.format(
-    "queue_control,%s,exec:lua,action_handler.lua %s %s %s %s",
-    key, action,value, domain_name, domain_uuid)
-
-
-
-    else
-         bind_str = string.format(
-            "queue_control,%s,exec:transfer,%s XML systech,both,self",
-            key, value
-        )
-
+        if bind_str then
+            freeswitch.consoleLog("INFO", string.format("[CallCenter] Binding digit %s → %s (%s)\n", key, action, value))
+            session:execute("bind_digit_action", bind_str)
+        end
     end
 
-    if bind_str then
-        freeswitch.consoleLog(
-            "INFO",
-            "[CallCenter] Binding digit " .. key ..
-            " → " .. action .. " (" .. value .. ")\n"
-        )
-        session:execute("bind_digit_action", bind_str)
-    end
-end
-    -- Transfer to queue
+    -- ============================================
+    -- Transfer to callcenter queue
+    -- ============================================
     session:execute("callcenter", queue)
-   
-     -- clear_digit_action  from  queue action
+
+    -- Clear digit actions after queue
     session:execute("clear_digit_action", "queue_control")
+
     return true
 end
-
 
 
 -- Ring Group (6000-6999)
