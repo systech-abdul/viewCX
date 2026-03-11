@@ -5,6 +5,8 @@ local ai_ws = require "ai_ws"
 local outbound_routes = require "outbound_routes"
 local base64 = require "resources.functions.base64"
 
+local check_queue_wait = require "queue_wait_check"
+
 api = freeswitch.API()
 local handlers = {}
 
@@ -736,12 +738,35 @@ function handlers.callcenter(args)
     session:setVariable("queue", queue)
     session:setVariable("information_node", "queue_answered")
 
+
+    -- ============================================
+    -- Check queue estimated wait before joining
+    -- ============================================
+    local high_wait_threshold = tonumber(queue_data.high_wait_threshold) or 0
+    local ivr_id = tonumber(queue_data.ivr_node)
+
+    -- Only run high wait check if threshold > 0
+    if high_wait_threshold > 0 then
+
+        freeswitch.consoleLog("INFO", string.format("[CallCenter] checking high_wait_threshold = %d", high_wait_threshold))
+
+        local high_wait = check_queue_wait(session, queue, high_wait_threshold)
+        if high_wait then
+            if ivr_id then
+                freeswitch.consoleLog("INFO", string.format("[CallCenter] High wait time detected, transferring to IVR with id: %d", ivr_id))
+                did_ivrs(ivr_id)
+            else
+                freeswitch.consoleLog("INFO", "[CallCenter] High wait time detected, but no IVR ID configured")
+            end
+        end
+    end
+
     -- ============================================
     -- Enable call recording if needed
     -- ============================================
     local direction = session:getVariable("direction") or "inbound"
     enable_recording_if_needed(direction)
-    freeswitch.consoleLog("INFO", "Record File = " .. tostring(session:getVariable("record_path")) .. "\n")
+    --freeswitch.consoleLog("INFO", "Record File = " .. tostring(session:getVariable("record_path")) .. "\n")
 
     -- ============================================
     -- VIP / Priority handling
@@ -770,14 +795,18 @@ function handlers.callcenter(args)
     -- Play greeting if exists
     -- ============================================
     local queue_greeting = queue_data.queue_greeting
-    if queue_greeting and queue_greeting ~= "" then
-        if os.rename(queue_greeting, queue_greeting) then
-            freeswitch.consoleLog("INFO", "[CallCenter] Playing queue greeting: " .. queue_greeting .. "\n")
-            session:execute("playback", queue_greeting)
+    
+    local queue_greeting_sound = get_base_path(domain_name,queue_greeting)
+
+     
+    if queue_greeting_sound and queue_greeting_sound ~= ""  and file_exists(queue_greeting_sound) then
+       
+            freeswitch.consoleLog("INFO", "[CallCenter] Playing queue greeting: " .. queue_greeting_sound .. "\n")
+            session:execute("playback", queue_greeting_sound)
             session:sleep(1000)
-        else
-            freeswitch.consoleLog("WARNING", "[CallCenter] Greeting file missing: " .. queue_greeting .. "\n")
-        end
+    else
+            freeswitch.consoleLog("WARNING", "[CallCenter] Greeting file missing: " .. queue_greeting_sound .. "\n")
+        
     end
 
     -- ============================================
@@ -785,7 +814,7 @@ function handlers.callcenter(args)
     -- ============================================
     local option_row = nil
     if queue_data.ivr_node and queue_data.ivr_node ~= "" then
-        local ivr_id = tonumber(queue_data.ivr_node)
+        
         if ivr_id then
             local option_sql = [[
                 SELECT
@@ -879,6 +908,8 @@ function handlers.callcenter(args)
     -- ============================================
     -- Transfer to callcenter queue
     -- ============================================
+
+     
     session:execute("callcenter", queue)
 
     -- Clear digit actions after queue
