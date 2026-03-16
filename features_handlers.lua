@@ -743,18 +743,18 @@ function handlers.callcenter(args)
     -- Check queue estimated wait before joining
     -- ============================================
     local high_wait_threshold = tonumber(queue_data.high_wait_threshold) or 0
-    local ivr_id = tonumber(queue_data.ivr_node)
+    local ivr_node_queue_id = tonumber(queue_data.ivr_node_queue)
 
     -- Only run high wait check if threshold > 0
     if high_wait_threshold > 0 then
 
-        freeswitch.consoleLog("INFO", string.format("[CallCenter] checking high_wait_threshold = %d", high_wait_threshold))
+        freeswitch.consoleLog("INFO", string.format("[CallCenter] checking high_wait_threshold = %d ivr_node_queue_id=%d", high_wait_threshold,ivr_node_queue_id))
 
         local high_wait = check_queue_wait(session, queue, high_wait_threshold)
         if high_wait then
-            if ivr_id then
-                freeswitch.consoleLog("INFO", string.format("[CallCenter] High wait time detected, transferring to IVR with id: %d", ivr_id))
-                did_ivrs(ivr_id)
+            if ivr_node_queue_id then
+                freeswitch.consoleLog("INFO", string.format("[CallCenter] High wait time detected, transferring to IVR with id: %d", ivr_node_queue_id))
+                did_ivrs(ivr_node_queue_id)
             else
                 freeswitch.consoleLog("INFO", "[CallCenter] High wait time detected, but no IVR ID configured")
             end
