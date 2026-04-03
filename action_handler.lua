@@ -2,7 +2,7 @@
 -- Unified wrapper for timegroup() and voicemail_handler()
 
 -- Load main features handlers
-dofile("/usr/share/freeswitch/scripts/features_handlers.lua")  -- adjust path if needed
+dofile("/usr/share/freeswitch/scripts/features_handlers.lua")  -
 
 -- Arguments from FreeSWITCH
 local action           = argv[1]  -- "timegroup" or "voicemail"

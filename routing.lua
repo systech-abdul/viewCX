@@ -1,8 +1,16 @@
-local handlers = require "features_handlers"
-local caller_handler = require "caller_handler"
+handlers = require "routes.ivr_master_routes"
 local Database = require "resources.functions.database"
 local json = require("resources.functions.lunajson")
-local outbound_routes = require "outbound_routes"
+local did_routes = require "routes.did_routes"
+local outbound_routes_handler = require "routes.outbound_routes"
+local outbound_dialout = require "utils.outbound_dialout"
+local extension_routes = require "routes.extension_routes"
+local ringgroup_routes = require "routes.ringgroup_routes"
+callcenter_routes = require "routes.callcenter_routes"
+
+route_action   = require "utils.route_action"
+node_routes = require "routes.node_routes"
+
 
 local dbh = Database.new("system")
 assert(dbh:connected())
@@ -42,22 +50,15 @@ local function mkdir_p(path)
     os.execute("mkdir -p " .. path)
 end
 
-local function build_record_path_in(domain, uuid, ext)
-    ext = ext or "wav"
+local function build_record_path(domain, filename)
+   
     local dir = string.format("/var/lib/freeswitch/recordings/%s/archive/%s/%s/%s",
         domain, os.date("%Y"), os.date("%b"), os.date("%d")
     )
     mkdir_p(dir)
-    return dir -- .. "/" .. uuid .. "." .. ext
+    return dir .. "/" .. filename
 end
-local function build_record_path_out(domain, uuid, ext)
-    ext = ext or "wav"
-    local dir = string.format("/var/lib/freeswitch/recordings/%s/archive/%s/%s/%s",
-        domain, os.date("%Y"), os.date("%b"), os.date("%d")
-    )
-    mkdir_p(dir)
-    return dir .. "/" .. uuid .. "." .. ext
-end
+
 function enable_recording_if_needed(call_type)
     -- Only record outbound here (you can expand later if needed)
     -- if call_type ~= "outbound" then return end
@@ -80,24 +81,29 @@ function enable_recording_if_needed(call_type)
     -- Recommended vars
     session:setVariable("RECORD_STEREO", "true")
     session:setVariable("recording_follow_transfer", "true")
+    
 
-    -- Start on answer (avoids ringing)
     
 
     -- Helpful for debugging / CDR
+    recfile = build_record_path(domain, filename)
     
     if call_type == "inbound" then
-        recfile = build_record_path_in(domain, uuid, rec_ext)
-        -- To this:
+       
         session:setVariable("record_path", recfile)
         session:setVariable("record_name", filename)
     -- Set variables as 'sticky' so they survive the bridge to the agent
         session:execute("bridge_export", "record_path=" .. recfile)
         session:execute("bridge_export", "record_name=" .. filename)
     else
-        recfile = build_record_path_out(domain, uuid, rec_ext)
         session:setVariable("execute_on_answer", "record_session::" .. recfile)
     end
+     
+     freeswitch.consoleLog("NOTICE",
+  "[recording] execute_on_answer=record_session::" ..
+  domain .. " uuid=" .. uuid .. " file=" .. filename .. "\n"
+)
+      session:execute("record_session", recfile)
 
     -- session:execute("set", "sticky:record_path=" .. recfile)
     -- session:execute("set", "sticky:record_name=" .. filename)
@@ -387,7 +393,7 @@ local function user_based_domain(args)
     if (debug["sql"]) then
         local json = require "resources.functions.lunajson"
         freeswitch.consoleLog("notice",
-            "[handlers.extensions] SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
+            "extension_routes.handle  SQL: " .. sql .. " | Params: " .. json.encode(params) .. "\n")
     end
 
     dbh:query(sql, params, function(row)
@@ -396,7 +402,7 @@ local function user_based_domain(args)
 
     if not extension then
         freeswitch.consoleLog("NOTICE",
-            "[handlers.extensions] No extension_uuid found for  " .. tostring(destination) .. "\n")
+            "extension_routes.handle No extension_uuid found for  " .. tostring(destination) .. "\n")
         return false
     end
 
@@ -419,11 +425,11 @@ local function dispatch(dest)
     end
 
     if valid_did then
-        return handlers.handle_did_call(args)
+        return did_routes.handle(session,dbh, args)
     end
 
     -- Compute outbound routing only ONCE
-    local route_info = outbound_routes.dialoutmatchForoutbound_routes(dest, domain_uuid)
+    local route_info = outbound_dialout.dialoutmatchForoutbound_routes(dest, domain_uuid)
 
     -- If outbound route matched → handle outbound
     if route_info then
@@ -446,18 +452,18 @@ local function dispatch(dest)
         freeswitch.consoleLog("info", "[routing.lua] Setting sip_rh_X-FS-UUID " .. session:getVariable("uuid") .. "\n")
         session:setVariable("sip_rh_X-FS-UUID", session:getVariable("uuid"))
         session:setVariable("sip_rh_X-Call-ID", session:getVariable("sip_call_id"))
-        return handlers.outbound(args, route_info)
+        return outbound_routes_handler.handle(session, dbh, args, route_info)
     else
         freeswitch.consoleLog("info", "[routing] No outbound route matched, proceeding with local extensions.\n")   
     end
 
     -- Local extension ranges
     if (num_dest and num_dest >= 1000 and num_dest <= 3999) or user_based_domain(args) then
-        return handlers.extension(args)
+        return extension_routes.handle(session, args)
     elseif num_dest and num_dest >= 4000 and num_dest <= 5999 then
-        return handlers.callcenter(args)
+        return callcenter_routes.handle(session, dbh, args)
     elseif num_dest and num_dest >= 6000 and num_dest <= 6999 then
-        return handlers.ringgroup(args)
+        return ringgroup_routes.handle(session, dbh, args, debug)
     elseif num_dest and num_dest >= 7000 and num_dest <= 8999 then
         return handlers.ivr(args)
         
@@ -466,7 +472,7 @@ local function dispatch(dest)
         return handlers.outbound(args, nil) ]]
     end
 
-    return false -- No match
+    return false 
 end
 
 
@@ -484,6 +490,8 @@ local routed = dispatch(did_destination)
 if routed then
     handle_prompt_cause()
     freeswitch.consoleLog("info", "[routing.lua] Call routed successfully.\n")
+
+
 else
     freeswitch.consoleLog("warning", "[routing.lua] No route found for: " .. did_destination .. "\n")
     session:execute("sleep", "1000")

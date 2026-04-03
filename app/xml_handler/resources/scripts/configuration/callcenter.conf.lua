@@ -242,7 +242,7 @@ debug["xml_string"] =true;
 						local kamailio_domain = nil
 						local with_kamailio = false
 						-- Build SQL
-						local sql = "SELECT kamailio_domain "
+						local sql = "SELECT kamailio_domain, kamailio_port "
 						sql = sql .. "FROM call_app_settings "
 						sql = sql .. "WHERE kamailio_enable = TRUE "
 						sql = sql .. "AND domain_uuid = '" .. domain_uuid .. "' "
@@ -254,14 +254,14 @@ debug["xml_string"] =true;
 						dbh:query(sql, function(row)
 							
 						    kamailio_domain = row.kamailio_domain
+                            kamailio_port = row.kamailio_port
 						    with_kamailio = true
 						end)
 						-- Build agent_contact only when Kamailio is enabled
 						if with_kamailio and kamailio_domain then
 						    agent_contact =
-						        "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
-						        "sofia/internal/" .. extension .. "@" .. kamailio_domain .. ";transport=tls"
-						end
+						        "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" .."sofia/internal/" .. extension .. "@" .. kamailio_domain ..":" .. kamailio_port .. ";transport=tls"
+end
 						-- Debug log
 						freeswitch.consoleLog(
 						    "debug",
