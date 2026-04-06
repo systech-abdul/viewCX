@@ -14,6 +14,7 @@ local path_util  = require "utils.path"
 
 
 
+
 api = freeswitch.API()
 local handlers = {}
 
@@ -680,7 +681,7 @@ function handlers.ivr(args, counter)
         session:setVariable("encoded_payload", json.encode(lua_ivr_vars or {}))
         session:setVariable("api_id", target)
         session:setVariable("ivr_menu_uuid", ivr_menu_uuid)
-        session:execute("lua", "api_handler.lua")
+        session:execute("lua", "utils/api_handler.lua")
 
     elseif action_type == "hangup" then
         session:execute("hangup")

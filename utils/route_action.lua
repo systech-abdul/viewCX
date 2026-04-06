@@ -4,6 +4,8 @@ local did_ivrs   = require "routes.did_ivrs"
 local path_util  = require "utils.path"
 local file       = require "utils.file"
 local voicemail  = require "features.voicemail"
+local outbound_dialout = require "utils.outbound_dialout"
+--local ringgroup_routes = require "routes.ringgroup_routes"
 
 local M = {}
 
@@ -20,6 +22,12 @@ function M.route_action(session, dbh, action_type, target, domain_name, domain_u
         string.format("[route_action] action_type=%s | target=%s | domain=%s | domain_uuid=%s | ivr_menu_uuid=%s\n",
             action_type, tostring(target), domain_name, domain_uuid, tostring(ivr_menu_uuid))
     )
+
+    local args = {
+                destination = target,
+                domain = domain_name,
+                domain_uuid = domain_uuid
+            }
 
     if action_type == "voicemail" then
         voicemail.handle(session, dbh, target, domain_name, domain_uuid)
@@ -40,6 +48,18 @@ function M.route_action(session, dbh, action_type, target, domain_name, domain_u
 
     elseif action_type == "hangup" then
         session:execute("hangup")
+        
+    elseif action_type == "ringgroup" then
+        ringgroup_routes.handle(session, dbh, args)
+
+    elseif action_type == "outbound" then
+        local route_info = outbound_dialout.dialoutmatchForoutbound_routes(target, domain_uuid)
+        outbound_routes_handler.handle(session, dbh, target, route_info)
+    elseif action_type == "extension" then
+
+       
+
+         extension_routes.handle(session,dbh,args)
 
     elseif action_type == "playback" then
         local path = path_util.recording_path(domain_name, target)

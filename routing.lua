@@ -2,11 +2,11 @@ handlers = require "routes.ivr_master_routes"
 local Database = require "resources.functions.database"
 local json = require("resources.functions.lunajson")
 local did_routes = require "routes.did_routes"
-local outbound_routes_handler = require "routes.outbound_routes"
 local outbound_dialout = require "utils.outbound_dialout"
-local extension_routes = require "routes.extension_routes"
-local ringgroup_routes = require "routes.ringgroup_routes"
+ringgroup_routes = require "routes.ringgroup_routes"
 callcenter_routes = require "routes.callcenter_routes"
+outbound_routes_handler = require "routes.outbound_routes"
+extension_routes = require "routes.extension_routes"
 
 route_action   = require "utils.route_action"
 node_routes = require "routes.node_routes"
@@ -459,7 +459,7 @@ local function dispatch(dest)
 
     -- Local extension ranges
     if (num_dest and num_dest >= 1000 and num_dest <= 3999) or user_based_domain(args) then
-        return extension_routes.handle(session, args)
+        return extension_routes.handle(session,dbh, args)
     elseif num_dest and num_dest >= 4000 and num_dest <= 5999 then
         return callcenter_routes.handle(session, dbh, args)
     elseif num_dest and num_dest >= 6000 and num_dest <= 6999 then

@@ -116,12 +116,13 @@ function M.handle(session, dbh, args)
             freeswitch.consoleLog("INFO",
                 "[CallCenter] Sticky agent: " .. agent_name .. "\n")
 
-            extension_routes.handle(session, {
+            local args = {
                 destination = agent_name,
                 domain = domain_name,
                 domain_uuid = domain_uuid
-            })
+            }
 
+            extension_routes.handle(session,dbh,args)
             return true
         else
             route_action.route_action(session, dbh,fallback_action, fallback_dest, domain_name, domain_uuid, nil)
