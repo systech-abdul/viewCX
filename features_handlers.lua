@@ -908,6 +908,19 @@ function handlers.callcenter(args)
     -- ============================================
     -- Transfer to callcenter queue
     -- ============================================
+    
+    local agent_moh = queue_data.agent_moh_sound
+   local queue_moh = queue_data.queue_moh_sound
+
+   
+    if queue_moh and queue_moh ~= "" then
+        session:execute("set", "cc_moh_override=" .. queue_moh)
+    end
+
+    if agent_moh and agent_moh ~= "" then
+        session:execute("set", "hold_music=" .. agent_moh)
+        session:execute("set", "cc_export_vars=hold_music")
+    end
 
      
     session:execute("callcenter", queue)
