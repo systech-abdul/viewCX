@@ -108,8 +108,9 @@ function M.handle(session, dbh, args)
     ------------------------------------------------------------------
     -- Sticky Agent Routing
     ------------------------------------------------------------------
-    if sticky_agent then
-        local agent_name, agent_id, available, fallback_action, fallback_dest =
+     freeswitch.consoleLog("INFO",
+                "[CallCenter] Sticky agent:  \n")
+     local agent_name, agent_id, available, fallback_action, fallback_dest =
             sticky_agent.route(session)
 
         if available and agent_name then
@@ -124,10 +125,26 @@ function M.handle(session, dbh, args)
 
             extension_routes.handle(session,dbh,args)
             return true
-        else
+        elseif fallback_action and fallback_dest then 
             route_action.route_action(session, dbh,fallback_action, fallback_dest, domain_name, domain_uuid, nil)
         end
+   
+
+
+
+   local agent_moh = queue_data.agent_moh_sound
+   local queue_moh = queue_data.queue_moh_sound
+
+   
+    if queue_moh and queue_moh ~= "" then
+        session:execute("set", "cc_moh_override=" .. queue_moh)
     end
+
+    if agent_moh and agent_moh ~= "" then
+        session:execute("set", "hold_music=" .. agent_moh)
+        session:execute("set", "cc_export_vars=hold_music")
+    end
+
 
     ------------------------------------------------------------------
     -- Join Queue

@@ -77,12 +77,14 @@ function M.handle(session,dbh, args)
     -- Logging
     ------------------------------------------------------------------
     freeswitch.consoleLog("INFO",
-        string.format("[extension_routes] Dest=%s Domain=%s KamEnable=%s KamIP=%s KamPort=%s\n",
+        string.format("[extension_routes] Dest=%s Domain=%s KamEnable=%s KamIP=%s KamPort=%s kam_source=%s\n",
             tostring(destination),
             tostring(domain),
             tostring(kam_enabled),
             tostring(kam_ip),
-            tostring(kam_port)
+            tostring(kam_port),
+            tostring(kam_source)
+
         )
     )
 
@@ -100,27 +102,22 @@ function M.handle(session,dbh, args)
     session:setVariable("hangup_after_bridge", "true")
     session:setVariable("continue_on_fail", "true")
 
-    ------------------------------------------------------------------
-    -- Build Base Dial Strings
-    ------------------------------------------------------------------
-    local webrtc_leg =
-        "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
-        "sofia/internal/" .. destination .. "@" .. (kam_ip or "") ..":".. kam_port ..";transport=tls"
-
-    local sip_leg =
-        "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
-        "sofia/internal/" .. destination .. "@" .. (kam_ip or "") .. ":5070"
-
-    local user_leg =
-        "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
-        "user/" .. destination .. "@" .. domain
 
     ------------------------------------------------------------------
     -- Routing Logic
     ------------------------------------------------------------------
 
     -- Case 1: Route via Kamailio (WebRTC -> SIP failover)
-    if kam_source and kam_ip and kam_ip ~= "" then
+    if kam_source ~= nil and kam_source ~= "" and kam_ip ~= nil and kam_ip ~= "" then
+
+
+      local webrtc_leg =
+        "{media_webrtc=true,media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+        "sofia/internal/" .. destination .. "@" .. (kam_ip or "") ..":".. tostring(kam_port or "") ..";transport=tls"
+
+      local sip_leg =
+        "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+        "sofia/internal/" .. destination .. "@" .. (kam_ip or "") .. ":5060"
 
         freeswitch.consoleLog("INFO",
             "[extension_routes] Routing via Kamailio\n"
@@ -128,11 +125,8 @@ function M.handle(session,dbh, args)
 
         local bridge_cmd =
             webrtc_leg ..
-            "|" ..  -- failover
-            sip_leg ..
-            "|" ..  -- optional fallback
-            user_leg
-
+            "|" ..  
+            sip_leg 
         session:execute("bridge", bridge_cmd)
         return true
     end
@@ -140,6 +134,11 @@ function M.handle(session,dbh, args)
     ------------------------------------------------------------------
     -- Case 2: Local User Only
     ------------------------------------------------------------------
+
+     local user_leg =
+        "{media_mix_inbound_outbound_codecs=true,ignore_early_media=true}" ..
+        "user/" .. destination .. "@" .. domain
+
     freeswitch.consoleLog("INFO",
         "[extension_routes] Routing to local user\n"
     )
