@@ -7,6 +7,7 @@ local check_queue_wait = require "features.queue_wait_check"
 local did_ivrs         = require "routes.did_ivrs"
 local route_action = require "utils.route_action"
 local extension_routes = require "routes.extension_routes"
+--json = require "cjson"
 local M = {}
 
 function M.handle(session, dbh, args)
@@ -93,6 +94,54 @@ function M.handle(session, dbh, args)
         session:setVariable("cc_base_score", tostring(score))
     end
 
+
+
+
+ 
+ -- ============================================
+-- Base64 encode meta-data if present or fetch from queue meta_header
+-- ============================================
+
+local db_meta = queue_data.meta_header
+local data = session:getVariable("meta_data")
+
+local expanded_meta = ""
+
+if db_meta and db_meta ~= "" then
+    expanded_meta = db_meta:gsub("%${(.-)}", function(var)
+        return session:getVariable(var) or ""
+    end)
+end
+
+local final_meta = ""
+
+if data and data ~= "" then
+    final_meta = data .. " | " .. expanded_meta
+else
+    final_meta = expanded_meta
+end
+
+freeswitch.consoleLog("INFO", "final_meta = " ..final_meta .. "\n")
+
+if final_meta ~= "" then
+    local b64 = base64.encode(final_meta)
+    session:setVariable("meta_data", b64)
+  
+    freeswitch.consoleLog("INFO",
+        "[CallCenter] meta_data OK = " .. b64 .. "\n")
+end
+
+     -- ============================================
+    -- Base64 encode meta-data if present
+    -- ============================================
+   -- local data = session:getVariable("meta_data")
+   -- if data then
+   --     local b64 = base64.encode(data)
+   --     session:setVariable("meta_data", b64)
+   --     freeswitch.consoleLog("INFO", "[CallCenter] Encoded meta_data = " .. b64 .. "\n")
+   -- end
+
+   
     ------------------------------------------------------------------
     -- Greeting
     ------------------------------------------------------------------
