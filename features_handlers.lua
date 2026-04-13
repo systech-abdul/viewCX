@@ -5,6 +5,8 @@ local ai_ws = require "ai_ws"
 local outbound_routes = require "outbound_routes"
 local base64 = require "resources.functions.base64"
 
+local check_queue_wait = require "queue_wait_check"
+
 api = freeswitch.API()
 local handlers = {}
 
@@ -736,12 +738,35 @@ function handlers.callcenter(args)
     session:setVariable("queue", queue)
     session:setVariable("information_node", "queue_answered")
 
+
+    -- ============================================
+    -- Check queue estimated wait before joining
+    -- ============================================
+    local high_wait_threshold = tonumber(queue_data.high_wait_threshold) or 0
+    local ivr_node_queue_id = tonumber(queue_data.ivr_node_queue)
+
+    -- Only run high wait check if threshold > 0
+    if high_wait_threshold > 0 then
+
+        freeswitch.consoleLog("INFO", string.format("[CallCenter] checking high_wait_threshold = %d ivr_node_queue_id=%d", high_wait_threshold,ivr_node_queue_id))
+
+        local high_wait = check_queue_wait(session, queue, high_wait_threshold)
+        if high_wait then
+            if ivr_node_queue_id then
+                freeswitch.consoleLog("INFO", string.format("[CallCenter] High wait time detected, transferring to IVR with id: %d", ivr_node_queue_id))
+                did_ivrs(ivr_node_queue_id)
+            else
+                freeswitch.consoleLog("INFO", "[CallCenter] High wait time detected, but no IVR ID configured")
+            end
+        end
+    end
+
     -- ============================================
     -- Enable call recording if needed
     -- ============================================
     local direction = session:getVariable("direction") or "inbound"
     enable_recording_if_needed(direction)
-    freeswitch.consoleLog("INFO", "Record File = " .. tostring(session:getVariable("record_path")) .. "\n")
+    --freeswitch.consoleLog("INFO", "Record File = " .. tostring(session:getVariable("record_path")) .. "\n")
 
     -- ============================================
     -- VIP / Priority handling
@@ -759,25 +784,57 @@ function handlers.callcenter(args)
     -- ============================================
     -- Base64 encode meta-data if present
     -- ============================================
+     
+ 
+     -- ============================================
+    -- Base64 encode meta-data if present or fetch from queue meta_header
+    -- ============================================
+    
+    local db_meta = queue_data.meta_header
     local data = session:getVariable("meta_data")
-    if data then
-        local b64 = base64.encode(data)
+    
+    local expanded_meta = ""
+    
+    if db_meta and db_meta ~= "" then
+        expanded_meta = db_meta:gsub("%${(.-)}", function(var)
+            return session:getVariable(var) or ""
+        end)
+    end
+    
+    local final_meta = ""
+    
+    if data and data ~= "" then
+        final_meta = data .. " | " .. expanded_meta
+    else
+        final_meta = expanded_meta
+    end
+    
+    freeswitch.consoleLog("INFO", "final_meta = " ..final_meta .. "\n")
+    
+    if final_meta ~= "" then
+        local b64 = base64.encode(final_meta)
         session:setVariable("meta_data", b64)
-        freeswitch.consoleLog("INFO", "[CallCenter] Encoded meta_data = " .. b64 .. "\n")
+    
+        freeswitch.consoleLog("INFO",
+            "[CallCenter] meta_data OK = " .. b64 .. "\n")
     end
 
     -- ============================================
     -- Play greeting if exists
     -- ============================================
     local queue_greeting = queue_data.queue_greeting
-    if queue_greeting and queue_greeting ~= "" then
-        if os.rename(queue_greeting, queue_greeting) then
-            freeswitch.consoleLog("INFO", "[CallCenter] Playing queue greeting: " .. queue_greeting .. "\n")
-            session:execute("playback", queue_greeting)
+    
+    local queue_greeting_sound = get_base_path(domain_name,queue_greeting)
+
+     
+    if queue_greeting_sound and queue_greeting_sound ~= ""  and file_exists(queue_greeting_sound) then
+       
+            freeswitch.consoleLog("INFO", "[CallCenter] Playing queue greeting: " .. queue_greeting_sound .. "\n")
+            session:execute("playback", queue_greeting_sound)
             session:sleep(1000)
-        else
-            freeswitch.consoleLog("WARNING", "[CallCenter] Greeting file missing: " .. queue_greeting .. "\n")
-        end
+    else
+            freeswitch.consoleLog("WARNING", "[CallCenter] Greeting file missing: " .. queue_greeting_sound .. "\n")
+        
     end
 
     -- ============================================
@@ -785,7 +842,7 @@ function handlers.callcenter(args)
     -- ============================================
     local option_row = nil
     if queue_data.ivr_node and queue_data.ivr_node ~= "" then
-        local ivr_id = tonumber(queue_data.ivr_node)
+        
         if ivr_id then
             local option_sql = [[
                 SELECT
@@ -879,6 +936,21 @@ function handlers.callcenter(args)
     -- ============================================
     -- Transfer to callcenter queue
     -- ============================================
+    
+    local agent_moh = queue_data.agent_moh_sound
+   local queue_moh = queue_data.queue_moh_sound
+
+   
+    if queue_moh and queue_moh ~= "" then
+        session:execute("set", "cc_moh_override=" .. queue_moh)
+    end
+
+    if agent_moh and agent_moh ~= "" then
+        session:execute("set", "hold_music=" .. agent_moh)
+        session:execute("set", "cc_export_vars=hold_music")
+    end
+
+     
     session:execute("callcenter", queue)
 
     -- Clear digit actions after queue
