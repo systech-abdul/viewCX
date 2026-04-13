@@ -91,7 +91,7 @@ function M.handle(session, dbh, args)
 
     if priority >= 1 and priority <= 9 then
         score = 1100 - (priority * 100)
-        session:setVariable("cc_base_score", tostring(score))
+        session:setVariable("cc_base_score", (score))
     end
 
 
@@ -143,15 +143,26 @@ end
 
    
     ------------------------------------------------------------------
-    -- Greeting
+    -- Play greeting if exists
     ------------------------------------------------------------------
-    local greeting_file = queue_data.queue_greeting
-    local greeting_path = greeting_file and
-        path_util.recording_path(domain_name, greeting_file)
+     greeting_file = queue_data.queue_greeting
+    local greeting_path = nil
 
-    if greeting_path and file.exists(greeting_path) then
+    -- Decide path
+    if greeting_file and greeting_file ~= "" and file.exists(greeting_file) then
+        greeting_path = greeting_file
+    else
+        greeting_path = greeting_file and path_util.recording_path(domain_name, greeting_file)
+    end
+
+    freeswitch.consoleLog("INFO", "[CallCenter_routes] greeting_path: " .. tostring(greeting_path) .. "\n")
+
+    -- Play if valid
+    if greeting_path and greeting_path ~= "" and file.exists(greeting_path) then
         session:execute("playback", greeting_path)
         session:sleep(1000)
+    else
+        freeswitch.consoleLog("WARNING", "[CallCenter_routes] Greeting file missing: " .. tostring(greeting_path) .. "\n")
     end
 
     ------------------------------------------------------------------
@@ -183,8 +194,9 @@ end
 
    local agent_moh = queue_data.agent_moh_sound
    local queue_moh = queue_data.queue_moh_sound
+   local call_center_queue_uuid = queue_data.call_center_queue_uuid
 
-   
+    session:execute("set", "call_center_queue_uuid=" .. call_center_queue_uuid)
     if queue_moh and queue_moh ~= "" then
         session:execute("set", "cc_moh_override=" .. queue_moh)
     end

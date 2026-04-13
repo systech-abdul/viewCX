@@ -291,13 +291,13 @@ end
 										pos = string.find(agent_contact, "}");
 										first = string.sub(agent_contact, 0, pos -1);
 										last = string.sub(agent_contact, pos);
-										agent_contact = first..[[,domain_name=]]..domain_name..[[,domain_uuid=]]..domain_uuid..[[,sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},call_timeout=]]..agent_call_timeout..last;
+										agent_contact = first..[[,domain_name=]]..domain_name..[[,domain_uuid=]]..domain_uuid..[[,sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},call_timeout=]]..agent_call_timeout..last;
 								else
 										--add the call_timeout
 										pos = string.find(agent_contact, "}");
 										first = string.sub(agent_contact, 0, pos - 1);
 										last = string.sub(agent_contact, pos);
-										agent_contact = first..[[,sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},call_timeout=]]..agent_call_timeout..last;
+										agent_contact = first..[[,sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},call_timeout=]]..agent_call_timeout..last;
 								end
 						else
 								--found
@@ -306,7 +306,7 @@ end
 								last = string.sub(agent_contact, pos);
 								if (string.find(agent_contact, 'call_timeout') == nil) then
 									--add the call_timeout and confirm
-									agent_contact = first..','..confirm..',sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_X-Queue_name=${queue_name},sip_h_X-Tenant-Domain=${domain_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},call_timeout='..agent_call_timeout..last;
+									agent_contact = first..','..confirm..',sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Tenant-Domain=${domain_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},call_timeout='..agent_call_timeout..last;
 								else
 									--add confirm
 									agent_contact = tmp_first..',domain_name="..domain_name..",domain_uuid="..domain_uuid..",sip_h_X-Call-ID=${uuid},sip_h_X-Queue_name=${queue_name},sip_h_X-Meta-Data=${meta_data},sip_h_X-Queue=${queue},sip_h_X-Tenant-Domain=${domain_name},'..confirm..tmp_last;
