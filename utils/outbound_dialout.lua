@@ -117,27 +117,26 @@ local function dialoutmatchForoutbound_routes(number, domain_uuid)
         -----------------------------------------------------
         if number:match(lua_pattern) then
 
-            -----------------------------------------------------
-            -- STEP 1 — Apply allowed_prefix BEFORE strip
-            -- Example:
-            --   number = 91XXXXXXXXXX
-            --   prefix = ++
-            --   final_before_strip = ++91XXXXXXXXXX
-            -----------------------------------------------------
+           
             local dial_number = number
 
-            if route.allowed_prefix and route.allowed_prefix ~= "" then
-                dial_number = route.allowed_prefix .. number
-            end
-
             -----------------------------------------------------
-            -- STEP 2 — Apply strip to FINAL STRING (prefix included)
+            -- STEP 1 — Apply strip to FINAL STRING (prefix included)
             -- strip = 1 → remove 1 char from LEFT:
             --   ++91XXXXXXXXXX → +91XXXXXXXXXX
             -----------------------------------------------------
             if route.strip and tonumber(route.strip) > 0 then
                 local s = tonumber(route.strip)
                 dial_number = dial_number:sub(s + 1)
+            end
+           
+           
+            -----------------------------------------------------
+            -- STEP 2 — Apply allowed_prefix 
+            -----------------------------------------------------
+            
+            if route.allowed_prefix and route.allowed_prefix ~= "" then
+                dial_number = route.allowed_prefix .. dial_number
             end
 
             -----------------------------------------------------
