@@ -410,7 +410,13 @@ local function user_based_domain(args)
 
 end
 
-
+-- Extract SIP domain
+local function extract_sip_domain(h)
+    if not h or h == "" then
+        return nil
+    end
+    return h:match("[sS][iI][pP][sS]?:[^@>]+@([^;>%]]+)")
+end
 
 -- Main dispatcher
 local function dispatch(dest)
@@ -430,6 +436,16 @@ local function dispatch(dest)
 
     -- Compute outbound routing only ONCE
     local route_info = outbound_dialout.dialoutmatchForoutbound_routes(dest, domain_uuid)
+
+
+    if not route_info then
+        local rpid_domain = extract_sip_domain(session:getVariable("sip_Remote-Party-ID"))
+        freeswitch.consoleLog("info", "[routing] resolved domain " .. tostring(rpid_domain) .. "\n")
+        if rpid_domain then
+            domain_uuid = get_domain_uuid(rpid_domain or refer_domain or domain_name or "")
+            route_info = outbound_dialout.dialoutmatchForoutbound_routes(dest, domain_uuid)
+        end
+    end
 
     -- If outbound route matched → handle outbound
     if route_info then
@@ -456,6 +472,7 @@ local function dispatch(dest)
     else
         freeswitch.consoleLog("info", "[routing] No outbound route matched, proceeding with local extensions.\n")   
     end
+
 
     -- Local extension ranges
     if (num_dest and num_dest >= 1000 and num_dest <= 3999) or user_based_domain(args) then
