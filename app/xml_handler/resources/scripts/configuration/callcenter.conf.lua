@@ -233,7 +233,7 @@ debug["xml_string"] =true;
 						--if you change this variable also change app/call_center/call_center_agent_edit.php
 						confirm = "group_confirm_file=ivr/ivr-accept_reject_voicemail.wav,group_confirm_key=1,group_confirm_read_timeout=2000,leg_timeout="..agent_call_timeout;
 						local record = "";
-						if (agent_record == "true") then
+						if agent_record ~= "false" then
 							record = string.format(",execute_on_pre_bridge='record_session %s/%s/archive/${strftime(%%Y)}/${strftime(%%b)}/${strftime(%%d)}/${uuid}.${record_ext}'", recordings_dir, domain_name)
 						end
 
