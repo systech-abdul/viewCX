@@ -73,8 +73,8 @@ function enable_recording_if_needed(call_type)
 
     local domain = session:getVariable("domain_name") or "default"
     local uuid   = session:getVariable("uuid")
-    local rec_ext = session:getVariable("record_ext") or "wav"
-    local filename = session:getVariable("record_name") or uuid .. "." .. rec_ext ;
+    local filename = uuid .. ".mp3";
+    
     -- Create dirs + build file
     localrecfile = ""
 
@@ -86,33 +86,35 @@ function enable_recording_if_needed(call_type)
     
 
     -- Helpful for debugging / CDR
-    recfile = build_record_path(domain, filename)
+    --recfile = build_record_path(domain, filename)
+
+    local record_path = string.format("/var/lib/freeswitch/recordings/%s/archive/%s/%s/%s",
+        domain, os.date("%Y"), os.date("%b"), os.date("%d")
+    )
+    mkdir_p(record_path)
     
-    if call_type == "inbound" then
+    recfile = record_path .. "/" .. filename
+    
+    if call_type then
        
-        session:setVariable("record_path", recfile)
+        session:setVariable("record_path", record_path)
         session:setVariable("record_name", filename)
     -- Set variables as 'sticky' so they survive the bridge to the agent
-        session:execute("bridge_export", "record_path=" .. recfile)
+        session:execute("bridge_export", "record_path=" .. record_path)
         session:execute("bridge_export", "record_name=" .. filename)
-    else
-        session:setVariable("execute_on_answer", "record_session::" .. recfile)
+    
+        --session:setVariable("execute_on_answer", "record_session::" .. recfile)
+        session:setVariable("api_on_answer", "uuid_record " .. uuid .. " start " .. recfile)
     end
-     
-     freeswitch.consoleLog("NOTICE",
-  "[recording] execute_on_answer=record_session::" ..
-  domain .. " uuid=" .. uuid .. " file=" .. filename .. "\n"
-)
-      session:execute("record_session", recfile)
+      
+     --session:execute("record_session", recfile)
 
-    -- session:execute("set", "sticky:record_path=" .. recfile)
-    -- session:execute("set", "sticky:record_name=" .. filename)
+        freeswitch.API():execute("uuid_record", uuid .. " start " .. recfile)
 
-    -- -- Export them to the B-leg (Agent) as well
-    -- session:execute("export", "sticky:record_path=" .. recfile)
-    -- session:execute("export", "sticky:record_name=" .. filename)
-
-    freeswitch.consoleLog("NOTICE", "[recording] execute_on_answer=record_session::" .. recfile .. "\n")
+        freeswitch.consoleLog("NOTICE",
+      "[recording] api_on_answer=uuid_record::" ..
+      domain .. " uuid=" .. uuid .. " file=" .. filename .. "\n"
+       )
 end
 
 -- Session variables
