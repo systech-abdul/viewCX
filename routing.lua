@@ -237,7 +237,7 @@ local function is_valid_did(dest)
     or session:getVariable("network_addr")
 
     
-    freeswitch.consoleLog("info", "[Lua] Caller IP: " .. tostring(caller_ip) .. "\n")
+    freeswitch.consoleLog("info", "[Routing] Caller IP: " .. tostring(caller_ip) .. "\n")
 
     ------------------------------------------------------------------
     -- SQL: include failover_type, failover_destination, and day validity
@@ -366,11 +366,10 @@ end
 
 
 local function user_based_domain(args)
+    freeswitch.consoleLog("info", "[user_based_extension] " .. tostring(args.destination) .. "\n")
 
-    freeswitch.consoleLog("info", "user_based_extension " .. tostring(args.destination) .. "\n")
-
-    local destination = args.did_destination
-    local domain_uuid = args.domain_uuid
+    local destination = args.destination
+    local domain_uuid = args.domain_uuid or session:getVariable("domain_uuid") 
 
     if not domain_uuid or not destination then
         freeswitch.consoleLog("err", "[user_based_extension] Missing domain_uuid or destination\n")
@@ -426,9 +425,9 @@ local function dispatch(dest)
     local valid_did = is_valid_did(dest)
     local domain_uuid = session:getVariable("domain_uuid")
 
-    freeswitch.consoleLog("info", "[routing] call direction " .. tostring(session:getVariable("call_direction")) .. "\n")
+    freeswitch.consoleLog("info", "[routing] call direction " .. tostring(session:getVariable("direction")) .. "\n")
 
-    if (session:getVariable("call_direction") == nil) then
+    if (session:getVariable("direction") == nil) then
         session:setVariable("call_direction", "inbound")
     end
 
@@ -495,12 +494,10 @@ local function dispatch(dest)
 end
 
 
---session:execute("info") 
 
--- destination_type = session:getVariable("destination_type") or ""
--- destination = session:getVariable("destination") or ""
 
 freeswitch.consoleLog("info", "[routing] destination " .. did_destination .. "\n")
+
 -- 🚀 Execute
 local routed = dispatch(did_destination)
 

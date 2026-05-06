@@ -84,7 +84,12 @@ function M.handle(session, dbh, args, route_info)
     -- Build Bridge String
     ------------------------------------------------------------------
     local bridge_list = {}
-
+    
+    local codec_string = session:getVariable("global_codec_prefs")
+    if codec_string then
+        session:setVariable("codec_string", codec_string)
+    end
+    
     for _, gw in ipairs(gateways) do
         table.insert(bridge_list,
             string.format("sofia/gateway/%s/%s", gw, dial_number))
@@ -98,6 +103,7 @@ function M.handle(session, dbh, args, route_info)
     ------------------------------------------------------------------
     -- Execute Bridge
     ------------------------------------------------------------------
+    session:setVariable("sip_h_X-trunk_call", "true");
     session:execute("bridge", bridge_dest)
 
     return true

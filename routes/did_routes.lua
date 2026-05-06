@@ -1,4 +1,6 @@
 local did_ivrs   = require "routes.did_ivrs"
+
+local holiday =  require "features.holiday"
 --local route_action   = require "utils/route_action"
 
 local M = {}
@@ -42,11 +44,20 @@ function M.handle(session,dbh, args)
     freeswitch.consoleLog(
         "info",
         string.format(
-            "[DID ROUTE] domain=%s, type=%s, did_dest=%s, dest=%s\n",
+            "[did_routes] domain=%s, type=%s, did_dest=%s, dest=%s\n",
             domain_name, did_type, did_destination, destination or "nil"
         )
     )
 
+
+    -- STEP 1: Holiday check
+    
+    if holiday.handle(session, dbh) then
+        return true
+    end
+
+    
+       
     ------------------------------------------------------------------
     -- IVR handling
     ------------------------------------------------------------------

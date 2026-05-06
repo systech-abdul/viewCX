@@ -20,7 +20,7 @@ function M.get_ivr_type_and_destination(dbh, ivr_menu_uuid, ivr_menu_option_digi
     }
 
     if debug and debug["sql"] then
-        freeswitch.consoleLog("notice", "[get_ivr_type_and_destination] SQL: " .. sql_ivr .. " | Params: " .. json.encode(params_ivr) .. "\n")
+        freeswitch.consoleLog("notice", "[timegroup --> get_ivr_type_and_destination] SQL: " .. sql_ivr .. " | Params: " .. json.encode(params_ivr) .. "\n")
     end
 
     local ivr_data = nil
@@ -32,7 +32,7 @@ function M.get_ivr_type_and_destination(dbh, ivr_menu_uuid, ivr_menu_option_digi
     end)
 
     if not found then
-        freeswitch.consoleLog("ERR", "[get_ivr_type_and_destination] No IVR destination found for UUID: " .. tostring(ivr_menu_uuid) .. " digits: " .. tostring(ivr_menu_option_digits) .. "\n")
+        freeswitch.consoleLog("ERR", "[timegroup --> get_ivr_type_and_destination] No IVR destination found for UUID: " .. tostring(ivr_menu_uuid) .. " digits: " .. tostring(ivr_menu_option_digits) .. "\n")
         return false
     end
 
