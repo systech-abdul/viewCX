@@ -1,6 +1,6 @@
 local did_ivrs   = require "routes.did_ivrs"
 
-local holiday =  require "features.holiday"
+--local holiday =  require "features.holiday"
 --local route_action   = require "utils/route_action"
 
 local M = {}
@@ -50,11 +50,11 @@ function M.handle(session,dbh, args)
     )
 
 
-    -- STEP 1: Holiday check
-    
-    if holiday.handle(session, dbh) then
-        return true
-    end
+   -- -- STEP 1: Holiday check
+   -- 
+   -- if holiday.handle(session, dbh) then
+   --     return true
+   -- end
 
     
        

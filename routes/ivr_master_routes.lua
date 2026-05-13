@@ -9,6 +9,7 @@ local ai_ws = require "features.ai_ws"
 local voicemail = require "features.voicemail"
 local outbound_routes_handler = require "routes.outbound_routes"
 local timegroup = require "features.timegroup"
+local holiday = require "features.holiday"
 local file = require "utils.file"
 local path_util  = require "utils.path"
 
@@ -54,6 +55,62 @@ local function search(list, key)
     return nil
 end
 
+
+------------------------------------------------------------
+--TRACK Call callflow for loop detection
+------------------------------------------------------------
+------------------------------------------------------------
+-- UNIVERSAL LOOP CHECK + PUSH
+------------------------------------------------------------
+local function check_and_push_route(session, feature_type, feature_id, max_try)
+
+    local history_raw = session:getVariable("route_history")
+    max_try = max_try or 2
+    local history = {}
+
+    if history_raw and history_raw ~= "" then
+        history = json.decode(history_raw)
+    end
+
+    local key = tostring(feature_type) .. ":" .. tostring(feature_id)
+
+    local count = 0
+
+    for _, v in ipairs(history) do
+        if v == key then
+            count = count + 1
+        end
+    end
+
+    --------------------------------------------------------
+    -- LOOP DETECTED
+    --------------------------------------------------------
+    if count >= max_try then
+        freeswitch.consoleLog(
+            "WARNING",
+            "[loop-detect] Loop detected for " .. key .."   max_try " .. max_try .. "\n"
+        )
+
+        return false
+    end
+
+    --------------------------------------------------------
+    -- PUSH ROUTE
+    --------------------------------------------------------
+    table.insert(history, key)
+
+    session:setVariable(
+        "route_history",
+        json.encode(history)
+    )
+
+    freeswitch.consoleLog(
+        "INFO",
+        "[loop-detect] Route push -> " .. key .. "\n"
+    )
+
+    return true
+end
 
 
 
@@ -505,6 +562,7 @@ function handlers.ivr(args, counter)
 
 
     freeswitch.consoleLog("console","parent_variable   " ..parent_variable);
+    
     -- Save IVR journey
     dbh:query([[
         INSERT INTO call_ivr_journeys (call_uuid, domain_uuid, full_path, variables, updated_at)
@@ -554,7 +612,7 @@ function handlers.ivr(args, counter)
             return handlers.ivr(args, counter)
         else
             freeswitch.consoleLog("WARNING", "Max IVR traversals reached\n")
-            session:execute("playback", "ivr/ivr-call_failed.wav")
+            session:execute("playback", exit_sound_path)
             return true
         end
 
@@ -585,18 +643,50 @@ function handlers.ivr(args, counter)
 
 
     elseif action_type == "backtoivr" then
+
+       
         local parent = session:getVariable("parent_ivr_id")
-        if parent and not visited[parent] then
-            visited[parent] = true
-            args.destination = parent
-            return handlers.ivr(args, counter)
-        else
+
+         freeswitch.consoleLog("INFO",string.format("[IVR] backtoivr: %s  %d \n", tostring(parent),max_failures))
+
+         if not check_and_push_route(session, action_type, parent,max_failures) then
             session:execute("playback", exit_sound_path)
+            return true
         end
 
+        args.destination = parent
+        return handlers.ivr(args, counter)
+
+        --if parent and not visited[parent] then
+        --    visited[parent] = true
+        --    args.destination = parent
+        --    return handlers.ivr(args, counter)
+        --else
+        --    session:execute("playback", exit_sound_path)
+        --end
+
     elseif action_type == "timegroup" then
+
+         if not check_and_push_route(session, action_type, destination,max_failures) then
+             session:execute("playback", exit_sound_path)
+             return true
+         end
+     
+         session:setVariable("parent_ivr_id", destination)
+     
+         return timegroup.handle(session, dbh, target, ivr_menu_uuid, input)
+
+
+    elseif action_type == "holiday" then
+
+        if not check_and_push_route(session,action_type, destination,max_failures) then
+            session:execute("playback", exit_sound_path)
+            return true
+        end
+
         session:setVariable("parent_ivr_id", destination)
-        timegroup.handle(session, dbh,target, ivr_menu_uuid, input)
+        return holiday.handle(session, dbh, target, ivr_menu_uuid, input)
+
 
     elseif action_type == "node" then
       

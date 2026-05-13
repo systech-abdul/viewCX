@@ -8,9 +8,13 @@ local function log(level, msg)
 end
 
 ------------------------------------------------------------
--- SINGLE QUERY: Find active holiday (NEW SCHEMA + tz_now FIX)
+-- VALIDATE HOLIDAY (ACTIVE + TIME MATCH + ID CHECK)
 ------------------------------------------------------------
-function M.get_holiday(dbh, domain_uuid)
+function M.validate_holiday(dbh, holiday_id, domain_uuid)
+
+    if not holiday_id or holiday_id == "" then
+        return false
+    end
 
     local sql = [[
         SELECT
@@ -30,7 +34,8 @@ function M.get_holiday(dbh, domain_uuid)
             action_data
         FROM tenant_holidays
         WHERE domain_uuid = :domain_uuid
-          AND is_active = true
+          AND id = :holiday_id
+          AND is_active = TRUE
           AND (
                 (
                     is_recurring = true
@@ -48,13 +53,17 @@ function M.get_holiday(dbh, domain_uuid)
                     )
                 )
           )
-        ORDER BY priority DESC
         LIMIT 1;
     ]]
 
-    local row
+    local params = {
+        domain_uuid = domain_uuid,
+        holiday_id = holiday_id
+    }
 
-    dbh:query(sql, { domain_uuid = domain_uuid }, function(r)
+    local row = nil
+
+    dbh:query(sql, params, function(r)
         row = r
     end)
 
@@ -62,40 +71,83 @@ function M.get_holiday(dbh, domain_uuid)
 end
 
 ------------------------------------------------------------
--- SAFE ROUTER
+-- IVR DESTINATION FETCH
 ------------------------------------------------------------
-local function safe_route(session, dbh, action_type, action_data, domain_name, domain_uuid)
+function M.get_ivr_type_and_destination(dbh, ivr_menu_uuid, ivr_menu_option_digits, debug, json)
+
+    if not ivr_menu_uuid or not ivr_menu_option_digits then
+        log("err", "IVR params missing")
+        return false
+    end
+
+    local sql = [[
+        SELECT
+            working_destination_type,
+            working_destination_num,
+            failover_destination_type,
+            failover_destination_num
+        FROM v_ivr_menu_options
+        WHERE ivr_menu_uuid = :ivr_menu_uuid
+          AND ivr_menu_option_digits = :ivr_menu_option_digits
+        LIMIT 1;
+    ]]
+
+    local params = {
+        ivr_menu_uuid = ivr_menu_uuid,
+        ivr_menu_option_digits = ivr_menu_option_digits
+    }
+
+    local row = nil
+
+    dbh:query(sql, params, function(r)
+        row = r
+    end)
+
+    return row
+end
+
+------------------------------------------------------------
+-- ROUTER
+------------------------------------------------------------
+local function route(session, dbh, dest_type, dest_num, domain_name, domain_uuid)
 
     if not session:ready() then
         log("err", "Session not ready")
         return false
     end
 
-    if not action_type or action_type == "" then
-        log("err", "Missing action_type")
+    if not dest_type or not dest_num then
+        log("err", "Missing destination")
         return false
     end
 
-    log("info", "Holiday action -> " .. action_type .. "\t action_data -> " .. action_data)
-
     local route_action = require "utils.route_action"
 
-    route_action.route_action(session,dbh,action_type,action_data,domain_name,domain_uuid)
+    route_action.route_action(
+        session,
+        dbh,
+        dest_type,
+        dest_num,
+        domain_name,
+        domain_uuid
+    )
 
-   
-    return true;
+    return true
 end
 
 ------------------------------------------------------------
 -- MAIN HANDLER
 ------------------------------------------------------------
-function M.handle(session, dbh, debug, json)
+function M.handle(session, dbh, holiday_id, ivr_menu_uuid, ivr_menu_option_digits, debug, json)
+
+    log("NOTICE",
+        "holiday_id: " .. tostring(holiday_id) ..
+        " ivr_menu_uuid: " .. tostring(ivr_menu_uuid)
+    )
 
     if not session:ready() then
         return false
     end
-
-    session:setVariable("current_application_data", "holiday")
 
     local domain_uuid = session:getVariable("domain_uuid")
     local domain_name = session:getVariable("domain_name")
@@ -105,45 +157,70 @@ function M.handle(session, dbh, debug, json)
         return false
     end
 
-    --------------------------------------------------------
-    -- SINGLE DB CALL ONLY
-    --------------------------------------------------------
-    local holiday = M.get_holiday(dbh, domain_uuid)
-
-    if not holiday then
-        log("info", "No holiday match → normal routing")
-        return false
-    end
-
- 
-    log("info", "MATCH: " .. tostring(holiday.holiday_name))
-
-    log("info", string.format(
-    "Tenant TZ: %s | Tenant Time: %s",
-    tostring(holiday.timezone),
-    tostring(holiday.tz_now)
-    ))
-
-    log("info", "Server Local Time: " .. os.date("%Y-%m-%d %H:%M:%S"))
-
-    session:setVariable("is_holiday", "true")
+    session:setVariable("current_application_data", "holiday")
 
     --------------------------------------------------------
-    -- ROUTING
+    -- CHECK HOLIDAY
     --------------------------------------------------------
-    if not holiday.action_type then
-        log("warn", "Holiday matched but no action_type → fallback")
-        return false
-    end
+    local holiday = M.validate_holiday(dbh, holiday_id, domain_uuid)
 
-    return safe_route(
-        session,
+    --------------------------------------------------------
+    -- FETCH IVR DESTINATION
+    --------------------------------------------------------
+    local ivr_data = M.get_ivr_type_and_destination(
         dbh,
-        holiday.action_type,
-        holiday.action_data,
-        domain_name,
-        domain_uuid
+        ivr_menu_uuid,
+        ivr_menu_option_digits,
+        debug,
+        json
     )
+
+    if not ivr_data then
+        log("err", "No IVR data found")
+        return false
+    end
+
+    --------------------------------------------------------
+    -- DECISION ENGINE
+    --------------------------------------------------------
+    local dest_type
+    local dest_num
+
+    if holiday then
+
+        ----------------------------------------------------
+        -- HOLIDAY ACTIVE  ROUTE
+        ----------------------------------------------------
+        session:setVariable("is_holiday", "true")
+        session:setVariable("holiday_name", tostring(holiday.holiday_name))
+
+        log("info", "HOLIDAY ACTIVE: " .. tostring(holiday.holiday_name))
+        log("info", "Tenant Time: " .. tostring(holiday.tz_now))
+
+        dest_type = ivr_data.working_destination_type
+        dest_num  = ivr_data.working_destination_num
+
+        log("info", "Holiday Route → " ..
+            tostring(dest_type) .. " : " .. tostring(dest_num))
+
+    else
+
+        ----------------------------------------------------
+        -- NORMAL → FAILOVER ROUTE
+        ----------------------------------------------------
+        session:setVariable("is_holiday", "false")
+
+        dest_type = ivr_data.failover_destination_type
+        dest_num  = ivr_data.failover_destination_num
+
+        log("info", "Normal Route (FAILOVER) → " ..
+            tostring(dest_type) .. " : " .. tostring(dest_num))
+    end
+
+    --------------------------------------------------------
+    -- EXECUTE ROUTE
+    --------------------------------------------------------
+    return route(session, dbh, dest_type, dest_num, domain_name, domain_uuid)
 end
 
 return M
