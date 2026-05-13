@@ -154,8 +154,15 @@ function handlers.ivr(args, counter)
     local MAX_PATH_STEPS = 20
 
     lua_ivr_vars = lua_ivr_vars or {}
-    
-    session:setVariable("information_node", "ivr_hangup");
+
+    local information_node = session:getVariable("information_node")
+
+    freeswitch.consoleLog("console", string.format("[IVR] information_node %s\n", tostring(information_node)))
+
+    if information_node == nil then
+        session:setVariable("information_node", "ivr_hangup")
+    end
+
     --session:execute("export", "information_node=ivr_hangup")
 
     -- Caller info
@@ -366,11 +373,11 @@ function handlers.ivr(args, counter)
  local preferred_gateway_uuid = ivr_data.preferred_gateway_uuid
  local ivr_menu_exit_app = ivr_data.ivr_menu_exit_app
  local ivr_menu_exit_data = ivr_data.ivr_menu_exit_data
- local information_node = ivr_data.information_node
- 
- if information_node then
-     session:setVariable("information_node", information_node or "ivr_node")
- end
+ --local information_node = ivr_data.information_node
+ --
+ --if information_node then
+ --    session:setVariable("information_node", information_node or "ivr_node")
+ --end
  
  -- Ensure the data exists before splitting to avoid nil errors
  local raw_keys = ivr_data.option_key or ""

@@ -193,6 +193,7 @@ function M.handle(session, dbh, holiday_id, ivr_menu_uuid, ivr_menu_option_digit
         ----------------------------------------------------
         session:setVariable("is_holiday", "true")
         session:setVariable("holiday_name", tostring(holiday.holiday_name))
+        session:setVariable("information_node", "ivr_non_working_hour")
 
         log("info", "HOLIDAY ACTIVE: " .. tostring(holiday.holiday_name))
         log("info", "Tenant Time: " .. tostring(holiday.tz_now))
