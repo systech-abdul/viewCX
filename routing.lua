@@ -10,7 +10,7 @@ extension_routes = require "routes.extension_routes"
 
 route_action   = require "utils.route_action"
 node_routes = require "routes.node_routes"
-
+holiday = require "features.holiday"
 
 local dbh = Database.new("system")
 assert(dbh:connected())

@@ -51,6 +51,10 @@ function M.route_action(session, dbh, action_type, target, domain_name, domain_u
         
     elseif action_type == "ringgroup" then
         ringgroup_routes.handle(session, dbh, args)
+    elseif action_type == "holiday" then
+
+        session:setVariable("parent_ivr_id", ivr_menu_uuid)
+        return holiday.handle(session, dbh, target, ivr_menu_uuid, nil)
 
     elseif action_type == "outbound" then
         local route_info = outbound_dialout.dialoutmatchForoutbound_routes(target, domain_uuid)

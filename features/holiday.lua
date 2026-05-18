@@ -158,6 +158,8 @@ function M.handle(session, dbh, holiday_id, ivr_menu_uuid, ivr_menu_option_digit
     end
 
     session:setVariable("current_application_data", "holiday")
+    session:setVariable("information_node", "holiday")
+ 
 
     --------------------------------------------------------
     -- CHECK HOLIDAY
@@ -177,51 +179,60 @@ function M.handle(session, dbh, holiday_id, ivr_menu_uuid, ivr_menu_option_digit
 
     if not ivr_data then
         log("err", "No IVR data found")
-        return false
+        --return false
     end
 
     --------------------------------------------------------
     -- DECISION ENGINE
     --------------------------------------------------------
+   
+
     local dest_type
     local dest_num
-
-    if holiday then
-
-        ----------------------------------------------------
-        -- HOLIDAY ACTIVE  ROUTE
-        ----------------------------------------------------
-        session:setVariable("is_holiday", "true")
-        session:setVariable("holiday_name", tostring(holiday.holiday_name))
-        session:setVariable("information_node", "holiday")
-
-        log("info", "HOLIDAY ACTIVE: " .. tostring(holiday.holiday_name))
-        log("info", "Tenant Time: " .. tostring(holiday.tz_now))
-
-        dest_type = ivr_data.working_destination_type
-        dest_num  = ivr_data.working_destination_num
-
-        log("info", "Holiday Route → " ..
-            tostring(dest_type) .. " : " .. tostring(dest_num))
-
+        
+    -- default source: IVR
+    if ivr_data then
+    
+        if holiday then
+            session:setVariable("is_holiday", "true")
+            session:setVariable("holiday_name", tostring(holiday.holiday_name))
+        
+            log("INFO", "HOLIDAY ACTIVE → " .. tostring(holiday.holiday_name))
+        
+            dest_type = ivr_data.working_destination_type
+            dest_num  = ivr_data.working_destination_num
+        else
+            session:setVariable("is_holiday", "false")
+        
+            log("INFO", "NORMAL ROUTE (FAILOVER)")
+        
+            dest_type = ivr_data.failover_destination_type
+            dest_num  = ivr_data.failover_destination_num
+        end
+    
     else
-
         ----------------------------------------------------
-        -- NORMAL → FAILOVER ROUTE
+        -- NO IVR → USE HOLIDAY FALLBACK ONLY ONCE
         ----------------------------------------------------
-        session:setVariable("is_holiday", "false")
-
-        dest_type = ivr_data.failover_destination_type
-        dest_num  = ivr_data.failover_destination_num
-
-        log("info", "Normal Route (FAILOVER) → " ..
-            tostring(dest_type) .. " : " .. tostring(dest_num))
+        log("WARN", "IVR missing → using fallback logic")
+    
+        if holiday and holiday.action_type and holiday.action_data then
+            dest_type = holiday.action_type
+            dest_num  = holiday.action_data
+        
+            log("INFO", "FALLBACK ROUTE → " .. dest_type .. ":" .. dest_num)
+        else
+            log("ERR", "No IVR and no holiday fallback")
+            return false
+        end
     end
+
 
     --------------------------------------------------------
     -- EXECUTE ROUTE
     --------------------------------------------------------
     return route(session, dbh, dest_type, dest_num, domain_name, domain_uuid)
+
 end
 
 return M

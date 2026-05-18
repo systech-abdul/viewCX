@@ -9,7 +9,7 @@ local ai_ws = require "features.ai_ws"
 local voicemail = require "features.voicemail"
 local outbound_routes_handler = require "routes.outbound_routes"
 local timegroup = require "features.timegroup"
-local holiday = require "features.holiday"
+
 local file = require "utils.file"
 local path_util  = require "utils.path"
 
@@ -782,6 +782,10 @@ function handlers.ivr(args, counter)
 
     elseif action_type == "hangup" then
         session:execute("hangup")
+        
+    --elseif action_type == "Playback" then
+    --    
+    --    session:execute("hangup")
     else
         session:execute("playback", exit_sound_path)
     end
